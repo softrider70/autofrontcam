@@ -86,6 +86,10 @@ extern "C" {
 #define WIFI_AP_SSID            "Cam-AP"
 #define WIFI_AP_IP              "10.1.1.1"
 #define WIFI_AP_NETMASK         "255.255.255.0"
+#define WIFI_AP_IP_BYTE0        10
+#define WIFI_AP_IP_BYTE1        1
+#define WIFI_AP_IP_BYTE2        1
+#define WIFI_AP_IP_BYTE3        1
 #define WIFI_CONNECT_TIMEOUT_S  15
 #define WIFI_MAX_RETRY          3
 

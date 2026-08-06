@@ -10,6 +10,7 @@ idf_component_register(
         voltage.c
         sleep.c
         lines.c
+        dns_server.c
     INCLUDE_DIRS
         ${CMAKE_SOURCE_DIR}/include
     EMBED_FILES

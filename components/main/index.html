@@ -177,9 +177,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     if(drag){drag=null;save();}
   }
 
-  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];onStart(t.clientX,t.clientY);},{passive:false});
-  cv.addEventListener('touchmove',function(e){e.preventDefault();var t=e.touches[0];onMove(t.clientX,t.clientY);},{passive:false});
-  cv.addEventListener('touchend',function(e){e.preventDefault();onEnd();},{passive:false});
+  var touchMoved=false;
+  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];onStart(t.clientX,t.clientY);touchMoved=false;},{passive:false});
+  cv.addEventListener('touchmove',function(e){e.preventDefault();touchMoved=true;var t=e.touches[0];onMove(t.clientX,t.clientY);},{passive:false});
+  cv.addEventListener('touchend',function(e){e.preventDefault();var wasDrag=!!drag;onEnd();if(!wasDrag&&!touchMoved){onTap();}},{passive:false});
   cv.addEventListener('touchcancel',function(e){e.preventDefault();onEnd();},{passive:false});
   cv.addEventListener('mousedown',function(e){onStart(e.clientX,e.clientY);});
   window.addEventListener('mousemove',function(e){if(drag)onMove(e.clientX,e.clientY);});
@@ -197,6 +198,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     draw();
   }
   cv.addEventListener('click',function(e){e.preventDefault();onTap();});
+  /* Menü schliessen bei Tipp auf freie Stelle (nicht Button/Panel) */
+  menu.addEventListener('click',function(e){
+    if(e.target===menu){menu.classList.remove('show');hint.style.display='none';draw();}
+  });
 
   function step(dx,da){
     var c=line(sel);

@@ -30,6 +30,7 @@
 #include "voltage.h"
 #include "sleep.h"
 #include "lines.h"
+#include "dns_server.h"
 #include "stack_monitor.h"
 #include "heap_monitor.h"
 
@@ -209,6 +210,30 @@ static esp_err_t api_config_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* =====================================================================
+ * Captive-Portal-Redirect: iOS/Android-Pruef-URLs -> Web-UI
+ * ===================================================================== */
+static esp_err_t captive_handler(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://" WIFI_AP_IP "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static const httpd_uri_t captive_apple = {
+    .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = captive_handler,
+};
+static const httpd_uri_t captive_android = {
+    .uri = "/generate_204", .method = HTTP_GET, .handler = captive_handler,
+};
+static const httpd_uri_t captive_windows = {
+    .uri = "/connecttest.txt", .method = HTTP_GET, .handler = captive_handler,
+};
+static const httpd_uri_t captive_apple_old = {
+    .uri = "/library/test/success.html", .method = HTTP_GET, .handler = captive_handler,
+};
+
 static void start_stream_server(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -251,6 +276,12 @@ static void start_stream_server(void)
 
     /* OTA-Handler (/update, /status) auf dem Hauptserver registrieren */
     ota_register_handlers(server);
+
+    /* Captive-Portal-Pruef-URLs (iOS/Android/Windows) auf die Web-UI umleiten */
+    httpd_register_uri_handler(server, &captive_apple);
+    httpd_register_uri_handler(server, &captive_android);
+    httpd_register_uri_handler(server, &captive_windows);
+    httpd_register_uri_handler(server, &captive_apple_old);
 
     /* WiFi-Captive-Portal nur registrieren, wenn benoetigt (keine Credentials) */
     if (wifi_portal_needed()) {
@@ -333,6 +364,10 @@ void app_main(void)
     /* WiFi initialisieren (AP bei fehlenden Credentials) */
     ESP_LOGI(TAG, "Initialize WiFi...");
     wifi_init();
+
+    /* DNS-Intercept: leitet alle Anfragen auf den AP, damit iOS/Android
+     * den Browser automatisch auf der Web-UI oeffnen */
+    dns_server_start();
 
     /* OTA-Webserver starten */
     ESP_LOGI(TAG, "Start OTA webserver...");
