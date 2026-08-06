@@ -34,8 +34,8 @@ static esp_netif_t *netif_sta = NULL;
 static esp_netif_t *netif_ap = NULL;
 static bool wifi_connected = false;
 static char current_ip[16] = {0};
-static bool captive_portal_running = false;
-static httpd_handle_t server_handle = NULL;
+static bool portal_needed = false;      /* Portal wird auf dem Hauptserver registriert */
+static bool portal_registered = false;
 
 /* ====================================================================
  * Captive Portal HTML-Seite (Konfiguration)
@@ -165,8 +165,8 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static const httpd_uri_t uri_get = {
-    .uri = "/",
+static const httpd_uri_t uri_wifi = {
+    .uri = "/wifi",
     .method = HTTP_GET,
     .handler = portal_get_handler,
 };
@@ -177,22 +177,22 @@ static const httpd_uri_t uri_save = {
     .handler = portal_save_handler,
 };
 
-static void start_captive_portal(void)
+/* Portal-Handler auf dem Hauptserver (Web-UI) registrieren */
+esp_err_t wifi_register_portal(httpd_handle_t server)
 {
-    if (captive_portal_running) return;
+    if (portal_registered) return ESP_OK;
+    if (!server) return ESP_ERR_INVALID_ARG;
 
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 8;
-    config.lru_purge_enable = true;
+    httpd_register_uri_handler(server, &uri_wifi);
+    httpd_register_uri_handler(server, &uri_save);
+    portal_registered = true;
+    ESP_LOGI(TAG, "WiFi-Portal registriert (/wifi, /save)");
+    return ESP_OK;
+}
 
-    if (httpd_start(&server_handle, &config) == ESP_OK) {
-        httpd_register_uri_handler(server_handle, &uri_get);
-        httpd_register_uri_handler(server_handle, &uri_save);
-        captive_portal_running = true;
-        ESP_LOGI(TAG, "Captive Portal gestartet auf http://%s", WIFI_AP_IP);
-    } else {
-        ESP_LOGE(TAG, "HTTP-Server-Start fehlgeschlagen");
-    }
+bool wifi_portal_needed(void)
+{
+    return portal_needed;
 }
 
 /* ====================================================================
@@ -338,15 +338,20 @@ esp_err_t wifi_init(void)
 
         ESP_ERROR_CHECK(esp_wifi_start());
 
-        /* AP-IP setzen */
-        esp_netif_ip_info_t ip_info;
-        ip_info.ip.addr = ipaddr_addr(WIFI_AP_IP);
-        ip_info.netmask.addr = ipaddr_addr(WIFI_AP_NETMASK);
-        ip_info.gw.addr = ipaddr_addr(WIFI_AP_IP);
+        /* AP-IP zuverlaessig nach dem Start setzen: DHCP stoppen, IP setzen, neu starten.
+         * Werte muessen zu WIFI_AP_IP / WIFI_AP_NETMASK in config.h passen. */
+        esp_netif_dhcps_stop(netif_ap);
+        esp_netif_ip_info_t ip_info = {0};
+        IP4_ADDR(&ip_info.ip, 10, 1, 1, 1);
+        IP4_ADDR(&ip_info.gw, 10, 1, 1, 1);
+        IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
         esp_netif_set_ip_info(netif_ap, &ip_info);
+        esp_netif_dhcps_start(netif_ap);
+        ESP_LOGI(TAG, "AP-IP gesetzt: " IPSTR, IP2STR(&ip_info.ip));
 
-        /* Captive Portal starten */
-        start_captive_portal();
+        /* Captive Portal wird spaeter auf dem Hauptserver registriert */
+        portal_needed = true;
+        ESP_LOGI(TAG, "WiFi-Portal wird benoetigt (keine Credentials)");
     }
 
     return ESP_OK;
@@ -354,10 +359,8 @@ esp_err_t wifi_init(void)
 
 esp_err_t wifi_manager_deinit(void)
 {
-    if (captive_portal_running && server_handle) {
-        httpd_stop(server_handle);
-        captive_portal_running = false;
-    }
+    portal_registered = false;
+    portal_needed = false;
 
     esp_wifi_stop();
     esp_wifi_deinit();

@@ -6,6 +6,7 @@
 #define OTA_H
 
 #include "esp_err.h"
+#include "esp_http_server.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,9 @@ extern "C" {
 
 esp_err_t ota_init(void);
 esp_err_t ota_deinit(void);
+
+/* OTA-Handler (/update, /status) auf dem Hauptserver registrieren */
+esp_err_t ota_register_handlers(httpd_handle_t server);
 
 #ifdef __cplusplus
 }

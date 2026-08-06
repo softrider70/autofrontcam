@@ -29,8 +29,10 @@ extern "C" {
  * ===================================================================== */
 #define LED_GPIO                33          /* Status-LED (rot) */
 #define LED_FLASH_GPIO          4           /* Kamera-Blitz */
-#define LED_ON                  0           /* ESP32-CAM LED ist active-low */
+#define LED_ON                  0           /* Status-LED (GPIO33) ist active-low */
 #define LED_OFF                 1
+#define FLASH_LED_ON            1           /* Flash-LED (GPIO4) ist AKTIV-HIGH */
+#define FLASH_LED_OFF           0
 
 /* =====================================================================
  * Kamera OV2640 - ESP32-CAM Pinbelegung (AI-Thinker)
@@ -53,12 +55,12 @@ extern "C" {
 #define CAM_PIN_PCLK            22
 
 /* Kamera-Parameter */
-#define CAM_XCLK_FREQ_HZ        20000000    /* 20 MHz */
+#define CAM_XCLK_FREQ_HZ        16000000    /* 16 MHz: stabileres DVP-Timing (weniger NO-SOI) */
 #define CAM_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define CAM_PIXEL_FORMAT        PIXFORMAT_JPEG
 #define CAM_FRAME_SIZE          FRAMESIZE_SVGA    /* 800x600 */
 #define CAM_JPEG_QUALITY        12
-#define CAM_FB_COUNT            2
+#define CAM_FB_COUNT            4           /* mehr Puffer = weniger NO-SOI/Ueberlauf */
 
 /* =====================================================================
  * MicroSD (ESP32-CAM Karten-Slot, SPI)
@@ -116,7 +118,7 @@ extern "C" {
 /* =====================================================================
  * Aufnahme / Stream
  * ===================================================================== */
-#define STREAM_PORT             81          /* MJPEG-Stream Port */
+#define STREAM_PORT             80          /* Haupt-Webserver: Web-UI + Stream + OTA + Portal */
 #define SNAPSHOT_INTERVAL_MS    1000        /* Snapshot fuer Status */
 
 #ifdef __cplusplus

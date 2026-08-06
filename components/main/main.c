@@ -213,6 +213,7 @@ static void start_stream_server(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = STREAM_PORT;
+    cfg.max_uri_handlers = 16;   /* Web-UI + Stream + API + OTA + Portal */
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
 
@@ -248,7 +249,15 @@ static void start_stream_server(void)
     httpd_register_uri_handler(server, &api_get);
     httpd_register_uri_handler(server, &api_post);
 
-    ESP_LOGI(TAG, "Stream-Server auf Port %d gestartet", STREAM_PORT);
+    /* OTA-Handler (/update, /status) auf dem Hauptserver registrieren */
+    ota_register_handlers(server);
+
+    /* WiFi-Captive-Portal nur registrieren, wenn benoetigt (keine Credentials) */
+    if (wifi_portal_needed()) {
+        wifi_register_portal(server);
+    }
+
+    ESP_LOGI(TAG, "Haupt-Webserver auf Port %d gestartet", STREAM_PORT);
 }
 
 /* =====================================================================
@@ -307,8 +316,8 @@ void app_main(void)
         .intr_type = GPIO_INTR_DISABLE
     };
     gpio_config(&led_conf);
-    gpio_set_level(LED_GPIO, LED_OFF);
-    gpio_set_level(LED_FLASH_GPIO, LED_OFF);
+    gpio_set_level(LED_GPIO, LED_OFF);              /* Status-LED aus (active-low) */
+    gpio_set_level(LED_FLASH_GPIO, FLASH_LED_OFF);  /* Flash-LED aus (aktiv-high) */
 
     /* Monitore starten */
     stack_monitor_init();

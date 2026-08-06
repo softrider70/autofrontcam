@@ -27,12 +27,14 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # Console: UART (Standard-USB-TTL CH340 auf COM4)
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 
-# Watchdogs deaktivieren (Kamera + Stream sind zeitkritisch)
+# Watchdogs: INT-WDT MUSS aktiv sein!
+# ESP32-D0WD-V3 (Rev. 3) + Dual-Core + PSRAM hat einen Cache-Lock-Bug, der den
+# Interrupt-Watchdog zwingend erfordert - sonst Assertion beim Boot (kein AP!).
+# Der INT-WDT prueft nur den Tick-Interrupt (nicht Tasks) -> unkritisch fuer Kamera/Stream.
+# Task-WDT bleibt deaktiviert (zeitkritische Tasks).
 CONFIG_ESP_TASK_WDT_INIT=n
 CONFIG_ESP_TASK_WDT=n
-CONFIG_ESP_INT_WDT=n
-CONFIG_ESP_INT_WDT_INIT=n
-CONFIG_ESP_WDT_INIT=n
+CONFIG_ESP_INT_WDT=y
 
 # FreeRTOS
 CONFIG_FREERTOS_HZ=100
