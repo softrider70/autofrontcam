@@ -300,19 +300,20 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     x.onload=function(){
       try{
         var j=JSON.parse(x.responseText);
-        cfg.voltage=j.voltage;
-        cfg.mode=j.mode;
-        cfg.threshold=j.threshold;
-        cfg.version=j.version;
-        cfg.build=j.build;
-        cfg.portrait=j.portrait;
-        cfg.landscape=j.landscape;
+        /* Version zuerst anzeigen (robust, auch wenn spaeter etwas fehlschlaegt) */
+        document.getElementById('ver').textContent=(j.version||'v?.?.?')+'  Build '+(j.build||0);
+        cfg.voltage=j.voltage||0;
+        cfg.mode=j.mode||0;
+        cfg.threshold=j.threshold||12.8;
+        cfg.version=j.version||'';
+        cfg.build=j.build||0;
+        cfg.portrait=j.portrait||cfg.portrait;
+        cfg.landscape=j.landscape||cfg.landscape;
         cfg.portrait.yellow.on=1;   /* gelbe Linie immer aktiv */
         cfg.landscape.yellow.on=1;
-        volt.textContent=(j.voltage>0?j.voltage.toFixed(1)+'V':'--.-V');
-        document.getElementById('ver').textContent=j.version+'  Build '+j.build;
-        document.getElementById('modeSel').value=j.mode;
-        document.getElementById('thresh').value=j.threshold;
+        volt.textContent=(cfg.voltage>0?cfg.voltage.toFixed(1)+'V':'--.-V');
+        document.getElementById('modeSel').value=cfg.mode;
+        document.getElementById('thresh').value=cfg.threshold;
         syncSliders();
         draw();
       }catch(e){}
