@@ -47,7 +47,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 </style>
 </head>
 <body>
-<img id="stream" src="/stream" alt="stream">
+<img id="stream" alt="stream">
 <canvas id="ov"></canvas>
 <div id="ver"></div>
 <div id="volt">--.-V</div>
@@ -87,6 +87,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 <script>
 (function(){
   var img=document.getElementById('stream');
+  img.src='http://'+window.location.hostname+':81/stream';   /* Stream auf eigenem Port */
   var cv=document.getElementById('ov');
   var ctx=cv.getContext('2d');
   var volt=document.getElementById('volt');

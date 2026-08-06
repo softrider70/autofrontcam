@@ -122,7 +122,8 @@ extern "C" {
 /* =====================================================================
  * Aufnahme / Stream
  * ===================================================================== */
-#define STREAM_PORT             80          /* Haupt-Webserver: Web-UI + Stream + OTA + Portal */
+#define STREAM_PORT             80          /* Haupt-Webserver: Web-UI + API + OTA + Portal */
+#define MJPEG_PORT              81          /* MJPEG-Stream + Einzelbild (eigener Server) */
 #define SNAPSHOT_INTERVAL_MS    1000        /* Snapshot fuer Status */
 
 #ifdef __cplusplus

@@ -257,9 +257,11 @@ static const httpd_uri_t captive_apple_old = {
 
 static void start_stream_server(void)
 {
+    /* Eigener Server nur fuer den MJPEG-Stream, damit er die Web-UI/API
+     * nicht blockiert (HTTPD-Blocking-Ursache behoben). */
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.server_port = STREAM_PORT;
-    cfg.max_uri_handlers = 16;   /* Web-UI + Stream + API + OTA + Portal */
+    cfg.server_port = MJPEG_PORT;
+    cfg.max_uri_handlers = 4;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
 
@@ -269,16 +271,36 @@ static void start_stream_server(void)
         return;
     }
 
-    httpd_uri_t root = {
-        .uri = "/", .method = HTTP_GET, .handler = root_handler,
-        .user_ctx = NULL
-    };
     httpd_uri_t stream = {
         .uri = "/stream", .method = HTTP_GET, .handler = stream_handler,
         .user_ctx = NULL
     };
     httpd_uri_t capture = {
         .uri = "/capture", .method = HTTP_GET, .handler = capture_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &stream);
+    httpd_register_uri_handler(server, &capture);
+
+    ESP_LOGI(TAG, "MJPEG-Stream-Server auf Port %d gestartet", MJPEG_PORT);
+}
+
+static void start_main_server(void)
+{
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port = STREAM_PORT;
+    cfg.max_uri_handlers = 16;   /* Web-UI + API + OTA + Portal */
+    cfg.lru_purge_enable = true;
+    cfg.stack_size = 8192;
+
+    httpd_handle_t server = NULL;
+    if (httpd_start(&server, &cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "Haupt-Server Start fehlgeschlagen");
+        return;
+    }
+
+    httpd_uri_t root = {
+        .uri = "/", .method = HTTP_GET, .handler = root_handler,
         .user_ctx = NULL
     };
     httpd_uri_t api_get = {
@@ -290,8 +312,6 @@ static void start_stream_server(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(server, &root);
-    httpd_register_uri_handler(server, &stream);
-    httpd_register_uri_handler(server, &capture);
     httpd_register_uri_handler(server, &api_get);
     httpd_register_uri_handler(server, &api_post);
 
@@ -394,7 +414,10 @@ void app_main(void)
     ESP_LOGI(TAG, "Start OTA webserver...");
     ota_init();
 
-    /* MJPEG-Stream-Server starten */
+    /* Haupt-Webserver (Web-UI + API + OTA + Portal) starten */
+    start_main_server();
+
+    /* MJPEG-Stream-Server auf eigenem Port (blockiert die API nicht) */
     start_stream_server();
 
     /* LED-Task */
