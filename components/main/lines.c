@@ -46,6 +46,10 @@ void lines_init(void)
     l_yellow.angle_deg = u8_to_angle(nvs_config_get_u8("lr_yel_a", angle_to_u8(l_yellow.angle_deg)));
     l_yellow.width_px = nvs_config_get_u8("lr_yel_w", l_yellow.width_px);
     l_yellow.enabled = nvs_config_get_u8("lr_yel_on", l_yellow.enabled ? 1 : 0) != 0;
+
+    /* Gelbe Linie ist immer aktiv (keine Ausschalt-Option) */
+    p_yellow.enabled = true;
+    l_yellow.enabled = true;
 }
 
 void lines_get_dual(line_cfg_t *p_red_o, line_cfg_t *p_yellow_o,
@@ -64,6 +68,10 @@ void lines_set_dual(const line_cfg_t *p_red_o, const line_cfg_t *p_yellow_o,
     if (p_yellow_o) p_yellow = *p_yellow_o;
     if (l_red_o) l_red = *l_red_o;
     if (l_yellow_o) l_yellow = *l_yellow_o;
+
+    /* Gelbe Linie ist immer aktiv (keine Ausschalt-Option) */
+    p_yellow.enabled = true;
+    l_yellow.enabled = true;
 
     /* --- Portrait --- */
     nvs_config_set_u8("pr_red_x", (uint8_t)p_red.x_percent);

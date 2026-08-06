@@ -73,7 +73,6 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     <input type="range" id="aRange" min="-45" max="45" step="1">
     <label>Dicke</label>
     <input type="range" id="wRange" min="1" max="15" step="1">
-    <label class="chk"><input type="checkbox" id="yelOn"> Gelbe Linie</label>
     <label>Modus</label>
     <select id="modeSel">
       <option value="0">Dauerbetrieb</option>
@@ -95,8 +94,8 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var hint=document.getElementById('hint');
 
   var cfg={voltage:0,mode:0,threshold:12.8,version:'',build:0,
-    portrait:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:0}},
-    landscape:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:0}}};
+    portrait:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:1}},
+    landscape:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:1}}};
   var sel='red';
   var drag=null;
 
@@ -238,12 +237,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     document.getElementById('xRange').value=c.x;
     document.getElementById('aRange').value=c.angle;
     document.getElementById('wRange').value=c.w;
-    document.getElementById('yelOn').checked=cfg.yellow.on===1;
   }
   document.getElementById('xRange').addEventListener('input',function(){line(sel).x=+this.value;draw();saveDebounced();});
   document.getElementById('aRange').addEventListener('input',function(){line(sel).angle=+this.value;draw();saveDebounced();});
   document.getElementById('wRange').addEventListener('input',function(){line(sel).w=+this.value;draw();saveDebounced();});
-  document.getElementById('yelOn').addEventListener('change',function(){cfg.yellow.on=this.checked?1:0;draw();save();});
   document.getElementById('modeSel').addEventListener('change',function(){cfg.mode=+this.value;save();});
   document.getElementById('thresh').addEventListener('change',function(){cfg.threshold=parseFloat(this.value);save();});
 
@@ -310,6 +307,8 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
         cfg.build=j.build;
         cfg.portrait=j.portrait;
         cfg.landscape=j.landscape;
+        cfg.portrait.yellow.on=1;   /* gelbe Linie immer aktiv */
+        cfg.landscape.yellow.on=1;
         volt.textContent=(j.voltage>0?j.voltage.toFixed(1)+'V':'--.-V');
         document.getElementById('ver').textContent=j.version+'  Build '+j.build;
         document.getElementById('modeSel').value=j.mode;
