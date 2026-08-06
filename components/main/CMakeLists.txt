@@ -36,3 +36,6 @@ add_custom_target(autofrontcam_version ALL
     VERBATIM
 )
 add_dependencies(${COMPONENT_LIB} autofrontcam_version)
+# main.c.obj haengt EXPLIZIT von version.h ab -> Generierung laeuft immer vor der
+# Kompilierung und main.c wird bei jeder Aenderung der Buildnummer neu gebaut
+target_sources(${COMPONENT_LIB} PRIVATE ${CMAKE_SOURCE_DIR}/include/version.h)
