@@ -10,6 +10,11 @@ sdkconfig.old
 # Komponenten aus der Component Registry (werden aus idf_component.yml generiert)
 managed_components/
 
+# Generierte Versions-/Build-Dateien (werden bei jedem Build neu erzeugt)
+include/version.h
+.build_number
+.last_version
+
 # IDE / Editor
 .vscode/
 .idea/

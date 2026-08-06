@@ -28,3 +28,11 @@ idf_component_register(
         esp_hw_support
         esp32-camera
 )
+
+# Build-Nummer erhoehen + include/version.h generieren (VOR der main-Kompilierung)
+add_custom_target(autofrontcam_version ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/increment_build.py
+    COMMENT "Erhoehe Build-Nummer und generiere version.h"
+    VERBATIM
+)
+add_dependencies(${COMPONENT_LIB} autofrontcam_version)

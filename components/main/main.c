@@ -23,6 +23,7 @@
 #include "driver/gpio.h"
 
 #include "config.h"
+#include "version.h"
 #include "camera.h"
 #include "wifi.h"
 #include "ota.h"
@@ -150,19 +151,25 @@ static int clamp_int(int v, int lo, int hi)
 
 static esp_err_t api_config_get_handler(httpd_req_t *req)
 {
-    char buf[512];
-    line_cfg_t r, y;
-    lines_get(&r, &y);
+    char buf[1024];
+    line_cfg_t p_r, p_y, l_r, l_y;
+    lines_get_dual(&p_r, &p_y, &l_r, &l_y);
 
     snprintf(buf, sizeof(buf),
              "{\"voltage\":%.1f,\"mode\":%d,\"threshold\":%.1f,"
-             "\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
-             "\"yellow\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d}}",
+             "\"version\":\"%s\",\"build\":%d,"
+             "\"portrait\":{\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
+             "\"yellow\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d}},"
+             "\"landscape\":{\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
+             "\"yellow\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d}}}",
              voltage_get_last(),
              voltage_is_regulated() ? 1 : 0,
              voltage_get_threshold(),
-             r.x_percent, r.angle_deg, r.width_px, r.enabled ? 1 : 0,
-             y.x_percent, y.angle_deg, y.width_px, y.enabled ? 1 : 0);
+             APP_VERSION_STRING, BUILD_NUMBER,
+             p_r.x_percent, p_r.angle_deg, p_r.width_px, p_r.enabled ? 1 : 0,
+             p_y.x_percent, p_y.angle_deg, p_y.width_px, p_y.enabled ? 1 : 0,
+             l_r.x_percent, l_r.angle_deg, l_r.width_px, l_r.enabled ? 1 : 0,
+             l_y.x_percent, l_y.angle_deg, l_y.width_px, l_y.enabled ? 1 : 0);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, strlen(buf));
@@ -171,7 +178,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req)
 
 static esp_err_t api_config_post_handler(httpd_req_t *req)
 {
-    char body[320];
+    char body[700];
     int ret = httpd_req_recv(req, body, sizeof(body) - 1);
     if (ret <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad Request");
@@ -180,30 +187,42 @@ static esp_err_t api_config_post_handler(httpd_req_t *req)
     body[ret] = '\0';
 
     char tmp[16];
-    line_cfg_t r, y;
-    lines_get(&r, &y);
+    line_cfg_t p_r, p_y, l_r, l_y;
+    lines_get_dual(&p_r, &p_y, &l_r, &l_y);
 
     if (form_get(body, "mode", tmp, sizeof(tmp)))
         voltage_set_mode(atoi(tmp) != 0);
     if (form_get(body, "threshold", tmp, sizeof(tmp)))
         voltage_set_threshold((float)atof(tmp));
 
-    if (form_get(body, "lx", tmp, sizeof(tmp))) r.x_percent = clamp_int(atoi(tmp), 0, 100);
-    if (form_get(body, "la", tmp, sizeof(tmp))) r.angle_deg = clamp_int(atoi(tmp), -45, 45);
-    if (form_get(body, "lw", tmp, sizeof(tmp))) r.width_px = clamp_int(atoi(tmp), 1, 15);
-    if (form_get(body, "lon", tmp, sizeof(tmp))) r.enabled = atoi(tmp) != 0;
+    /* Portrait */
+    if (form_get(body, "px", tmp, sizeof(tmp))) p_r.x_percent = clamp_int(atoi(tmp), 0, 100);
+    if (form_get(body, "pa", tmp, sizeof(tmp))) p_r.angle_deg = clamp_int(atoi(tmp), -45, 45);
+    if (form_get(body, "pw", tmp, sizeof(tmp))) p_r.width_px = clamp_int(atoi(tmp), 1, 15);
+    if (form_get(body, "pon", tmp, sizeof(tmp))) p_r.enabled = atoi(tmp) != 0;
+    if (form_get(body, "pyx", tmp, sizeof(tmp))) p_y.x_percent = clamp_int(atoi(tmp), 0, 100);
+    if (form_get(body, "pya", tmp, sizeof(tmp))) p_y.angle_deg = clamp_int(atoi(tmp), -45, 45);
+    if (form_get(body, "pyw", tmp, sizeof(tmp))) p_y.width_px = clamp_int(atoi(tmp), 1, 15);
+    if (form_get(body, "pyon", tmp, sizeof(tmp))) p_y.enabled = atoi(tmp) != 0;
 
-    if (form_get(body, "l2x", tmp, sizeof(tmp))) y.x_percent = clamp_int(atoi(tmp), 0, 100);
-    if (form_get(body, "l2a", tmp, sizeof(tmp))) y.angle_deg = clamp_int(atoi(tmp), -45, 45);
-    if (form_get(body, "l2w", tmp, sizeof(tmp))) y.width_px = clamp_int(atoi(tmp), 1, 15);
-    if (form_get(body, "l2on", tmp, sizeof(tmp))) y.enabled = atoi(tmp) != 0;
+    /* Landscape */
+    if (form_get(body, "lx", tmp, sizeof(tmp))) l_r.x_percent = clamp_int(atoi(tmp), 0, 100);
+    if (form_get(body, "la", tmp, sizeof(tmp))) l_r.angle_deg = clamp_int(atoi(tmp), -45, 45);
+    if (form_get(body, "lw", tmp, sizeof(tmp))) l_r.width_px = clamp_int(atoi(tmp), 1, 15);
+    if (form_get(body, "lon", tmp, sizeof(tmp))) l_r.enabled = atoi(tmp) != 0;
+    if (form_get(body, "lyx", tmp, sizeof(tmp))) l_y.x_percent = clamp_int(atoi(tmp), 0, 100);
+    if (form_get(body, "lya", tmp, sizeof(tmp))) l_y.angle_deg = clamp_int(atoi(tmp), -45, 45);
+    if (form_get(body, "lyw", tmp, sizeof(tmp))) l_y.width_px = clamp_int(atoi(tmp), 1, 15);
+    if (form_get(body, "lyon", tmp, sizeof(tmp))) l_y.enabled = atoi(tmp) != 0;
 
-    lines_set(&r, &y);
+    lines_set_dual(&p_r, &p_y, &l_r, &l_y);
 
-    ESP_LOGI(TAG, "Config gespeichert (Modus=%d, Schwelle=%.1fV, Rot x=%d a=%d w=%d, Gelb x=%d a=%d w=%d)",
-             voltage_is_regulated() ? 1 : 0, voltage_get_threshold(),
-             r.x_percent, r.angle_deg, r.width_px,
-             y.x_percent, y.angle_deg, y.width_px);
+    ESP_LOGI(TAG, "Config gespeichert (v%s, P: r%d a%d w%d y%d a%d w%d | L: r%d a%d w%d y%d a%d w%d)",
+             APP_VERSION_STRING,
+             p_r.x_percent, p_r.angle_deg, p_r.width_px,
+             p_y.x_percent, p_y.angle_deg, p_y.width_px,
+             l_r.x_percent, l_r.angle_deg, l_r.width_px,
+             l_y.x_percent, l_y.angle_deg, l_y.width_px);
 
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "OK", 2);

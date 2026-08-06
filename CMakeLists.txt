@@ -5,3 +5,5 @@ set(EXTRA_COMPONENT_DIRS components)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(autofrontcam)
+
+# Build-Nummer + version.h wird in components/main/CMakeLists.txt generiert

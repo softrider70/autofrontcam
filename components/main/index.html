@@ -11,6 +11,9 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   font-family:Arial,sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
 #stream{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
 #ov{position:fixed;inset:0;width:100%;height:100%}
+#ver{position:fixed;top:10px;left:10px;color:#aaa;font:12px monospace;
+  text-shadow:0 0 4px #000;background:rgba(0,0,0,0.4);padding:3px 8px;border-radius:6px;
+  z-index:20;pointer-events:none}
 #volt{position:fixed;top:10px;right:10px;color:#0f0;font:bold 16px monospace;
   text-shadow:0 0 4px #000;background:rgba(0,0,0,0.5);padding:5px 10px;border-radius:6px;
   z-index:20;pointer-events:none}
@@ -46,6 +49,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 <body>
 <img id="stream" src="/stream" alt="stream">
 <canvas id="ov"></canvas>
+<div id="ver"></div>
 <div id="volt">--.-V</div>
 <div id="hint">Tippe auf den Bildschirm für Menü</div>
 
@@ -90,27 +94,33 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var menu=document.getElementById('menu');
   var hint=document.getElementById('hint');
 
-  var cfg={voltage:0,mode:0,threshold:12.8,
-    red:{x:50,angle:0,w:3,on:1},
-    yellow:{x:60,angle:0,w:3,on:0}};
+  var cfg={voltage:0,mode:0,threshold:12.8,version:'',build:0,
+    portrait:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:0}},
+    landscape:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:0}}};
   var sel='red';
   var drag=null;
+
+  function isPortrait(){return window.innerHeight>window.innerWidth;}
+  function activeSet(){return isPortrait()?cfg.portrait:cfg.landscape;}
+  function line(c){return activeSet()[c];}
 
   function sizeCanvas(){
     cv.width=img.clientWidth;
     cv.height=img.clientHeight;
     draw();
   }
-  window.addEventListener('resize',sizeCanvas);
-
-  function line(c){return c==='red'?cfg.red:cfg.yellow;}
+  window.addEventListener('resize',function(){sizeCanvas();syncSliders();});
+  window.addEventListener('orientationchange',function(){
+    setTimeout(function(){sizeCanvas();syncSliders();},300);
+  });
 
   function draw(){
     var w=cv.width,h=cv.height;
     if(!w||!h)return;
     ctx.clearRect(0,0,w,h);
-    drawOne(cfg.red,'#ff2a2a');
-    drawOne(cfg.yellow,'#ffe600');
+    var s=activeSet();
+    drawOne(s.red,'#ff2a2a');
+    drawOne(s.yellow,'#ffe600');
   }
   function drawOne(c,a){
     if(!c.on)return;
@@ -275,9 +285,12 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     saveT=setTimeout(save,600);
   }
   function save(){
+    var p=cfg.portrait,l=cfg.landscape;
     var body='mode='+cfg.mode+'&threshold='+cfg.threshold+
-      '&lx='+cfg.red.x+'&la='+cfg.red.angle+'&lw='+cfg.red.w+'&lon='+(cfg.red.on?1:0)+
-      '&l2x='+cfg.yellow.x+'&l2a='+cfg.yellow.angle+'&l2w='+cfg.yellow.w+'&l2on='+(cfg.yellow.on?1:0);
+      '&px='+p.red.x+'&pa='+p.red.angle+'&pw='+p.red.w+'&pon='+(p.red.on?1:0)+
+      '&pyx='+p.yellow.x+'&pya='+p.yellow.angle+'&pyw='+p.yellow.w+'&pyon='+(p.yellow.on?1:0)+
+      '&lx='+l.red.x+'&la='+l.red.angle+'&lw='+l.red.w+'&lon='+(l.red.on?1:0)+
+      '&lyx='+l.yellow.x+'&lya='+l.yellow.angle+'&lyw='+l.yellow.w+'&lyon='+(l.yellow.on?1:0);
     var x=new XMLHttpRequest();
     x.open('POST','/api/config',true);
     x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
@@ -293,9 +306,12 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
         cfg.voltage=j.voltage;
         cfg.mode=j.mode;
         cfg.threshold=j.threshold;
-        cfg.red=j.red;
-        cfg.yellow=j.yellow;
+        cfg.version=j.version;
+        cfg.build=j.build;
+        cfg.portrait=j.portrait;
+        cfg.landscape=j.landscape;
         volt.textContent=(j.voltage>0?j.voltage.toFixed(1)+'V':'--.-V');
+        document.getElementById('ver').textContent=j.version+'  Build '+j.build;
         document.getElementById('modeSel').value=j.mode;
         document.getElementById('thresh').value=j.threshold;
         syncSliders();

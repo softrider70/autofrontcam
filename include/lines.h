@@ -4,8 +4,9 @@
  * Zwei Linien im Canvas-Overlay ueber dem Livestream:
  *   - Rot: Fahrzeugkante (Standard)
  *   - Gelb: optionale zweite Linie
- * Eigenschaften je Linie: X-Position (%), Winkel (Grad), Dicke (px), aktiv.
- * Alle Werte werden in NVS gespeichert und ueberleben Sleep/Neustart.
+ *
+ * Die Einstellungen werden GETRENNT fuer Hoch- und Querformat in NVS
+ * gespeichert (andere Kamera-Ansicht je nach Bildausrichtung).
  */
 
 #ifndef LINES_H
@@ -24,14 +25,16 @@ typedef struct {
     bool enabled;
 } line_cfg_t;
 
-/* Einstellungen aus NVS laden (Defaults, falls nicht vorhanden) */
+/* Beide Orientierungs-Saetze aus NVS laden (Defaults, falls nicht vorhanden) */
 void lines_init(void);
 
-/* Aktuelle Konfiguration holen */
-void lines_get(line_cfg_t *red, line_cfg_t *yellow);
+/* Beide Saetze holen (Portrait + Landscape). Pointer duerfen NULL sein. */
+void lines_get_dual(line_cfg_t *p_red, line_cfg_t *p_yellow,
+                    line_cfg_t *l_red, line_cfg_t *l_yellow);
 
-/* Konfiguration setzen und in NVS speichern */
-void lines_set(const line_cfg_t *red, const line_cfg_t *yellow);
+/* Beide Saetze setzen und in NVS speichern. Pointer duerfen NULL sein. */
+void lines_set_dual(const line_cfg_t *p_red, const line_cfg_t *p_yellow,
+                    const line_cfg_t *l_red, const line_cfg_t *l_yellow);
 
 #ifdef __cplusplus
 }

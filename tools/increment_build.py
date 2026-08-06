@@ -60,8 +60,8 @@ def increment_build_number(major, minor):
     
     # Check if MAJOR or MINOR changed
     if last_major is not None and (major != last_major or minor != last_minor):
-        # Version changed: reset BUILD_NUMBER to 0
-        build_num = 0
+        # Version changed: reset BUILD_NUMBER to 1 (beginnend bei 1)
+        build_num = 1
         was_reset = True
     else:
         # Same version: increment BUILD_NUMBER
@@ -118,7 +118,7 @@ if __name__ == "__main__":
         
         # Log message
         if was_reset:
-            print(f"Version updated: {version_string} (BUILD_NUMBER reset to 0)")
+            print(f"Version updated: {version_string} (BUILD_NUMBER reset to 1)")
         else:
             print(f"Build #{build_num} generated: {version_string}")
             
