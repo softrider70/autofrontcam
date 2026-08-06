@@ -1,0 +1,29 @@
+idf_component_register(
+    SRCS
+        main.c
+        camera.c
+        nvs_config.c
+        heap_monitor.c
+        stack_monitor.c
+        wifi.c
+        ota.c
+        voltage.c
+        sleep.c
+        lines.c
+    INCLUDE_DIRS
+        ${CMAKE_SOURCE_DIR}/include
+    EMBED_FILES
+        index.html
+    REQUIRES
+        nvs_flash
+        esp_timer
+        driver
+        esp_wifi
+        esp_netif
+        esp_http_server
+        app_update
+        esp_driver_gpio
+        esp_adc
+        esp_hw_support
+        esp32-camera
+)

@@ -1,0 +1,20 @@
+# ESP-IDF Build-Ausgaben
+build/
+sdkconfig
+sdkconfig.old
+*.o
+*.elf
+*.bin
+*.map
+
+# Komponenten aus der Component Registry (werden aus idf_component.yml generiert)
+managed_components/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

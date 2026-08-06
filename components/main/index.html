@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Autofrontcam</title>
+<style>
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
+  font-family:Arial,sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
+#stream{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+#ov{position:fixed;inset:0;width:100%;height:100%}
+#volt{position:fixed;top:10px;right:10px;color:#0f0;font:bold 16px monospace;
+  text-shadow:0 0 4px #000;background:rgba(0,0,0,0.5);padding:5px 10px;border-radius:6px;
+  z-index:20;pointer-events:none}
+#hint{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);color:#ccc;
+  font:13px sans-serif;text-shadow:0 0 3px #000;background:rgba(0,0,0,0.5);
+  padding:5px 12px;border-radius:14px;z-index:20;pointer-events:none;display:none}
+#menu{position:fixed;inset:0;display:none;z-index:10}
+#menu.show{display:block}
+#ctrl{position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;gap:10px}
+.btn{width:56px;height:56px;font-size:26px;color:#fff;background:rgba(0,0,0,0.55);
+  border:1px solid rgba(255,255,255,0.45);border-radius:12px;display:flex;
+  align-items:center;justify-content:center;cursor:pointer}
+.btn:active{background:rgba(0,0,0,0.85)}
+#panel{position:absolute;right:12px;top:50%;transform:translateY(-50%);width:180px;
+  background:rgba(0,0,0,0.72);border:1px solid rgba(255,255,255,0.3);border-radius:12px;
+  padding:14px;color:#eee;font:13px sans-serif}
+#panel h3{margin:0 0 10px;font-size:14px;color:#ffd}
+#panel label{display:block;margin:8px 0 3px}
+#panel input[type=range]{width:100%}
+#panel select,#panel input[type=number]{width:100%;padding:4px;border-radius:4px;border:none;box-sizing:border-box}
+#panel .chk{display:flex;align-items:center;gap:6px;margin-top:10px}
+#otaBtn{position:absolute;left:12px;bottom:12px;padding:12px 20px;
+  background:rgba(40,120,220,0.85);color:#fff;border:none;border-radius:10px;
+  font-size:15px;cursor:pointer}
+#otaBtn:active{background:rgba(30,90,170,0.95)}
+#lineSel{display:flex;gap:6px;margin-bottom:8px}
+#lineSel button{flex:1;padding:6px;border-radius:6px;border:1px solid #555;
+  background:rgba(255,255,255,0.1);color:#ccc;font-size:12px;cursor:pointer}
+#lineSel button.active{background:#fff;color:#000}
+</style>
+</head>
+<body>
+<img id="stream" src="/stream" alt="stream">
+<canvas id="ov"></canvas>
+<div id="volt">--.-V</div>
+<div id="hint">Tippe auf den Bildschirm für Menü</div>
+
+<div id="menu">
+  <input type="file" id="fileInput" accept=".bin" style="display:none">
+  <div id="ctrl">
+    <div class="btn" id="bLeft">◀</div>
+    <div class="btn" id="bRight">▶</div>
+    <div class="btn" id="bRotL">↺</div>
+    <div class="btn" id="bRotR">↻</div>
+  </div>
+  <div id="panel">
+    <h3>Einstellungen</h3>
+    <div id="lineSel">
+      <button id="selRed" class="active">Rot</button>
+      <button id="selYellow">Gelb</button>
+    </div>
+    <label>X-Position</label>
+    <input type="range" id="xRange" min="0" max="100" step="1">
+    <label>Winkel</label>
+    <input type="range" id="aRange" min="-45" max="45" step="1">
+    <label>Dicke</label>
+    <input type="range" id="wRange" min="1" max="15" step="1">
+    <label class="chk"><input type="checkbox" id="yelOn"> Gelbe Linie</label>
+    <label>Modus</label>
+    <select id="modeSel">
+      <option value="0">Dauerbetrieb</option>
+      <option value="1">Geregelt</option>
+    </select>
+    <label>Grenzwert (V)</label>
+    <input type="number" id="thresh" min="6" max="14.5" step="0.1">
+  </div>
+  <button id="otaBtn">OTA</button>
+</div>
+
+<script>
+(function(){
+  var img=document.getElementById('stream');
+  var cv=document.getElementById('ov');
+  var ctx=cv.getContext('2d');
+  var volt=document.getElementById('volt');
+  var menu=document.getElementById('menu');
+  var hint=document.getElementById('hint');
+
+  var cfg={voltage:0,mode:0,threshold:12.8,
+    red:{x:50,angle:0,w:3,on:1},
+    yellow:{x:60,angle:0,w:3,on:0}};
+  var sel='red';
+  var drag=null;
+
+  function sizeCanvas(){
+    cv.width=img.clientWidth;
+    cv.height=img.clientHeight;
+    draw();
+  }
+  window.addEventListener('resize',sizeCanvas);
+
+  function line(c){return c==='red'?cfg.red:cfg.yellow;}
+
+  function draw(){
+    var w=cv.width,h=cv.height;
+    if(!w||!h)return;
+    ctx.clearRect(0,0,w,h);
+    drawOne(cfg.red,'#ff2a2a');
+    drawOne(cfg.yellow,'#ffe600');
+  }
+  function drawOne(c,a){
+    if(!c.on)return;
+    var w=cv.width,h=cv.height;
+    var cx=c.x/100*w, cy=h/2;
+    var rad=c.angle*Math.PI/180, half=h/2;
+    var x1=cx+half*Math.sin(rad), y1=cy-half*Math.cos(rad);
+    var x2=cx-half*Math.sin(rad), y2=cy+half*Math.cos(rad);
+    ctx.strokeStyle=a;ctx.lineWidth=c.w;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    if(menu.classList.contains('show')){
+      var r=Math.max(8,c.w+5);
+      ctx.fillStyle=a;
+      ctx.beginPath();ctx.arc(x1,y1,r,0,6.2832);ctx.fill();
+      ctx.beginPath();ctx.arc(x2,y2,r,0,6.2832);ctx.fill();
+    }
+  }
+
+  function lineEnds(c){
+    var w=cv.width,h=cv.height;
+    var cx=c.x/100*w, cy=h/2, rad=c.angle*Math.PI/180, half=h/2;
+    return {x1:cx+half*Math.sin(rad),y1:cy-half*Math.cos(rad),
+            x2:cx-half*Math.sin(rad),y2:cy+half*Math.cos(rad)};
+  }
+  function distToLine(c,x,y){
+    var e=lineEnds(c);
+    var dx=e.x2-e.x1,dy=e.y2-e.y1;
+    var t=((x-e.x1)*dx+(y-e.y1)*dy)/(dx*dx+dy*dy);
+    t=Math.max(0,Math.min(1,t));
+    return Math.hypot(x-(e.x1+t*dx),y-(e.y1+t*dy));
+  }
+
+  function onStart(x,y){
+    if(!menu.classList.contains('show'))return;
+    var cand=[];
+    ['red','yellow'].forEach(function(k){
+      var c=line(k);
+      if(!c.on)return;
+      var e=lineEnds(c);
+      if(Math.hypot(x-e.x1,y-e.y1)<30)cand.push({line:k,type:'rot'});
+      else if(distToLine(c,x,y)<24)cand.push({line:k,type:'move'});
+    });
+    if(cand.length){
+      drag=cand[0];
+      drag.startX=x;drag.startY=y;
+      drag.startCx=line(drag.line).x;
+      drag.startAngle=line(drag.line).angle;
+    }
+  }
+  function onMove(x,y){
+    if(!drag)return;
+    var c=line(drag.line);
+    if(drag.type==='move'){
+      var dx=(x-drag.startX)/cv.width*100;
+      c.x=Math.max(0,Math.min(100,drag.startCx+dx));
+    }else{
+      var e=lineEnds(c);
+      var ang=Math.atan2(y-e.y1,x-e.x1)*180/Math.PI-90;
+      c.angle=Math.max(-45,Math.min(45,ang));
+    }
+    draw();syncSliders();saveDebounced();
+  }
+  function onEnd(){
+    if(drag){drag=null;save();}
+  }
+
+  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];onStart(t.clientX,t.clientY);},{passive:false});
+  cv.addEventListener('touchmove',function(e){e.preventDefault();var t=e.touches[0];onMove(t.clientX,t.clientY);},{passive:false});
+  cv.addEventListener('touchend',function(e){e.preventDefault();onEnd();},{passive:false});
+  cv.addEventListener('touchcancel',function(e){e.preventDefault();onEnd();},{passive:false});
+  cv.addEventListener('mousedown',function(e){onStart(e.clientX,e.clientY);});
+  window.addEventListener('mousemove',function(e){if(drag)onMove(e.clientX,e.clientY);});
+  window.addEventListener('mouseup',onEnd);
+
+  function onTap(){
+    if(drag)return;
+    if(menu.classList.contains('show')){
+      menu.classList.remove('show');hint.style.display='none';
+    }else{
+      menu.classList.add('show');
+      hint.style.display='block';
+      setTimeout(function(){hint.style.display='none';},2500);
+    }
+    draw();
+  }
+  cv.addEventListener('click',function(e){e.preventDefault();onTap();});
+
+  function step(dx,da){
+    var c=line(sel);
+    c.x=Math.max(0,Math.min(100,c.x+dx));
+    c.angle=Math.max(-45,Math.min(45,c.angle+da));
+    draw();syncSliders();save();
+  }
+  document.getElementById('bLeft').addEventListener('click',function(){step(-1,0);});
+  document.getElementById('bRight').addEventListener('click',function(){step(1,0);});
+  document.getElementById('bRotL').addEventListener('click',function(){step(0,-1);});
+  document.getElementById('bRotR').addEventListener('click',function(){step(0,1);});
+
+  function selectLine(k){
+    sel=k;
+    document.getElementById('selRed').classList.toggle('active',k==='red');
+    document.getElementById('selYellow').classList.toggle('active',k==='yellow');
+    syncSliders();
+  }
+  document.getElementById('selRed').addEventListener('click',function(){selectLine('red');});
+  document.getElementById('selYellow').addEventListener('click',function(){selectLine('yellow');});
+
+  function syncSliders(){
+    var c=line(sel);
+    document.getElementById('xRange').value=c.x;
+    document.getElementById('aRange').value=c.angle;
+    document.getElementById('wRange').value=c.w;
+    document.getElementById('yelOn').checked=cfg.yellow.on===1;
+  }
+  document.getElementById('xRange').addEventListener('input',function(){line(sel).x=+this.value;draw();saveDebounced();});
+  document.getElementById('aRange').addEventListener('input',function(){line(sel).angle=+this.value;draw();saveDebounced();});
+  document.getElementById('wRange').addEventListener('input',function(){line(sel).w=+this.value;draw();saveDebounced();});
+  document.getElementById('yelOn').addEventListener('change',function(){cfg.yellow.on=this.checked?1:0;draw();save();});
+  document.getElementById('modeSel').addEventListener('change',function(){cfg.mode=+this.value;save();});
+  document.getElementById('thresh').addEventListener('change',function(){cfg.threshold=parseFloat(this.value);save();});
+
+  ['bLeft','bRight','bRotL','bRotR','otaBtn'].forEach(function(id){
+    document.getElementById(id).addEventListener('click',function(e){e.stopPropagation();});
+  });
+  document.getElementById('panel').addEventListener('click',function(e){e.stopPropagation();});
+  var otaBtn=document.getElementById('otaBtn');
+  var fileInput=document.getElementById('fileInput');
+  otaBtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    fileInput.click();   /* oeffnet den Datei-Picker (Files-App) */
+  });
+  fileInput.addEventListener('change',function(){
+    var f=this.files[0];
+    this.value='';
+    if(!f)return;
+    otaBtn.textContent='0%';
+    var x=new XMLHttpRequest();
+    x.open('POST','/update',true);
+    x.setRequestHeader('Content-Type','application/octet-stream');
+    x.upload.onprogress=function(e){
+      if(e.lengthComputable){otaBtn.textContent=Math.round(e.loaded/e.total*100)+'%';}
+    };
+    x.onload=function(){
+      otaBtn.textContent='OTA';
+      alert(x.responseText||'Fertig - Neustart');
+    };
+    x.onerror=function(){
+      otaBtn.textContent='OTA';
+      alert('Fehler beim Upload');
+    };
+    x.send(f);   /* sendet die .bin als Rohdaten an /update */
+  });
+
+  var saveT=null;
+  function saveDebounced(){
+    if(saveT)clearTimeout(saveT);
+    saveT=setTimeout(save,600);
+  }
+  function save(){
+    var body='mode='+cfg.mode+'&threshold='+cfg.threshold+
+      '&lx='+cfg.red.x+'&la='+cfg.red.angle+'&lw='+cfg.red.w+'&lon='+(cfg.red.on?1:0)+
+      '&l2x='+cfg.yellow.x+'&l2a='+cfg.yellow.angle+'&l2w='+cfg.yellow.w+'&l2on='+(cfg.yellow.on?1:0);
+    var x=new XMLHttpRequest();
+    x.open('POST','/api/config',true);
+    x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+    x.send(body);
+  }
+
+  function poll(){
+    var x=new XMLHttpRequest();
+    x.open('GET','/api/config',true);
+    x.onload=function(){
+      try{
+        var j=JSON.parse(x.responseText);
+        cfg.voltage=j.voltage;
+        cfg.mode=j.mode;
+        cfg.threshold=j.threshold;
+        cfg.red=j.red;
+        cfg.yellow=j.yellow;
+        volt.textContent=(j.voltage>0?j.voltage.toFixed(1)+'V':'--.-V');
+        document.getElementById('modeSel').value=j.mode;
+        document.getElementById('thresh').value=j.threshold;
+        syncSliders();
+        draw();
+      }catch(e){}
+    };
+    x.send();
+  }
+  setInterval(poll,2000);
+  poll();
+  sizeCanvas();
+})();
+</script>
+</body>
+</html>
