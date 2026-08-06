@@ -261,6 +261,7 @@ static void start_stream_server(void)
      * nicht blockiert (HTTPD-Blocking-Ursache behoben). */
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = MJPEG_PORT;
+    cfg.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;  /* eigener Ctrl-Port, sonst EADDRINUSE */
     cfg.max_uri_handlers = 4;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
