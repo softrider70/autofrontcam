@@ -156,6 +156,22 @@ static int clamp_int(int v, int lo, int hi)
     return v;
 }
 
+/* Bild-Neigungswinkel in NVS (u8, -45..45 -> Offset 45) */
+#define IMG_ROT_MIN   (-45)
+#define IMG_ROT_MAX   (45)
+#define IMG_ROT_OFFSET 45
+
+static int img_rot_get(void)
+{
+    return (int)nvs_config_get_u8("img_rot", IMG_ROT_OFFSET) - IMG_ROT_OFFSET;
+}
+
+static void img_rot_set(int deg)
+{
+    deg = clamp_int(deg, IMG_ROT_MIN, IMG_ROT_MAX);
+    nvs_config_set_u8("img_rot", (uint8_t)(deg + IMG_ROT_OFFSET));
+}
+
 static esp_err_t api_config_get_handler(httpd_req_t *req)
 {
     char buf[1024];
@@ -164,7 +180,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req)
 
     snprintf(buf, sizeof(buf),
              "{\"voltage\":%.1f,\"mode\":%d,\"threshold\":%.1f,"
-             "\"version\":\"%s\",\"build\":%d,"
+             "\"version\":\"%s\",\"build\":%d,\"rot\":%d,"
              "\"portrait\":{\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
              "\"yellow\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d}},"
              "\"landscape\":{\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
@@ -172,7 +188,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req)
              voltage_get_last(),
              voltage_is_regulated() ? 1 : 0,
              voltage_get_threshold(),
-             APP_VERSION_STRING, BUILD_NUMBER,
+             APP_VERSION_STRING, BUILD_NUMBER, img_rot_get(),
              p_r.x_percent, p_r.angle_deg, p_r.width_px, p_r.enabled ? 1 : 0,
              p_y.x_percent, p_y.angle_deg, p_y.width_px, p_y.enabled ? 1 : 0,
              l_r.x_percent, l_r.angle_deg, l_r.width_px, l_r.enabled ? 1 : 0,
@@ -201,6 +217,8 @@ static esp_err_t api_config_post_handler(httpd_req_t *req)
         voltage_set_mode(atoi(tmp) != 0);
     if (form_get(body, "threshold", tmp, sizeof(tmp)))
         voltage_set_threshold((float)atof(tmp));
+    if (form_get(body, "rot", tmp, sizeof(tmp)))
+        img_rot_set(atoi(tmp));
 
     /* Portrait */
     if (form_get(body, "px", tmp, sizeof(tmp))) p_r.x_percent = clamp_int(atoi(tmp), 0, 100);

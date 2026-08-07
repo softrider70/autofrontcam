@@ -11,6 +11,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   font-family:Arial,sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
 #stream{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
 #ov{position:fixed;inset:0;width:100%;height:100%}
+#stage{position:fixed;inset:0;transform-origin:center center}
 #ver{position:fixed;top:10px;left:10px;color:#aaa;font:12px monospace;
   text-shadow:0 0 4px #000;background:rgba(0,0,0,0.4);padding:3px 8px;border-radius:6px;
   z-index:20;pointer-events:none}
@@ -51,8 +52,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 </style>
 </head>
 <body>
-<img id="stream" alt="stream">
-<canvas id="ov"></canvas>
+<div id="stage">
+  <img id="stream" alt="stream">
+  <canvas id="ov"></canvas>
+</div>
 <div id="ver"></div>
 <div id="volt">--.-V</div>
 <div id="busy">⚠ Anderes Gerät<br>empfängt den Stream</div>
@@ -78,6 +81,8 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     <input type="range" id="aRange" min="-45" max="45" step="1">
     <label>Dicke</label>
     <input type="range" id="wRange" min="1" max="15" step="1">
+    <label>Bild drehen (°)</label>
+    <input type="range" id="rotRange" min="-45" max="45" step="1">
     <label>Modus</label>
     <select id="modeSel">
       <option value="0">Dauerbetrieb</option>
@@ -94,10 +99,29 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var img=document.getElementById('stream');
   var cv=document.getElementById('ov');
   var ctx=cv.getContext('2d');
+  var stage=document.getElementById('stage');
   var volt=document.getElementById('volt');
   var menu=document.getElementById('menu');
   var hint=document.getElementById('hint');
   var busy=document.getElementById('busy');
+
+  /* ===== Bilddrehung: gesamten Stage (Bild + Overlay) drehen =====
+   * Winkel kommt vom Server (NVS), angewendet als CSS-Transform.
+   * Touch-Koordinaten werden zurueckgedreht, damit Ziehen/Drehen der
+   * Linien im ungedrehten Canvas-Koordinatensystem funktioniert. */
+  var rot=0;
+  function applyRot(){
+    stage.style.transform='rotate('+rot+'deg)';
+  }
+  /* Viewport-Koordinate in Canvas-Koordinate umrechnen (Rotation rueckgaengig) */
+  function toCanvas(x,y){
+    if(!rot) return {x:x,y:y};
+    var cx=cv.width/2, cy=cv.height/2;
+    var rad=-rot*Math.PI/180;
+    var dx=x-cx, dy=y-cy;
+    return {x:cx+dx*Math.cos(rad)-dy*Math.sin(rad),
+            y:cy+dx*Math.sin(rad)+dy*Math.cos(rad)};
+  }
 
   /* ===== Stream-Client =====
    * iOS Safari rendert multipart/x-mixed-replace im <img> nicht zuverlaessig.
@@ -251,12 +275,12 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   }
 
   var touchMoved=false;
-  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];onStart(t.clientX,t.clientY);touchMoved=false;},{passive:false});
-  cv.addEventListener('touchmove',function(e){e.preventDefault();touchMoved=true;var t=e.touches[0];onMove(t.clientX,t.clientY);},{passive:false});
+  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];var p=toCanvas(t.clientX,t.clientY);onStart(p.x,p.y);touchMoved=false;},{passive:false});
+  cv.addEventListener('touchmove',function(e){e.preventDefault();touchMoved=true;var t=e.touches[0];var p=toCanvas(t.clientX,t.clientY);onMove(p.x,p.y);},{passive:false});
   cv.addEventListener('touchend',function(e){e.preventDefault();var wasDrag=!!drag;onEnd();if(!wasDrag&&!touchMoved){onTap();}},{passive:false});
   cv.addEventListener('touchcancel',function(e){e.preventDefault();onEnd();},{passive:false});
-  cv.addEventListener('mousedown',function(e){onStart(e.clientX,e.clientY);});
-  window.addEventListener('mousemove',function(e){if(drag)onMove(e.clientX,e.clientY);});
+  cv.addEventListener('mousedown',function(e){var p=toCanvas(e.clientX,e.clientY);onStart(p.x,p.y);});
+  window.addEventListener('mousemove',function(e){if(drag){var p=toCanvas(e.clientX,e.clientY);onMove(p.x,p.y);}});
   window.addEventListener('mouseup',onEnd);
 
   function onTap(){
@@ -305,6 +329,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   document.getElementById('xRange').addEventListener('input',function(){line(sel).x=+this.value;draw();saveDebounced();});
   document.getElementById('aRange').addEventListener('input',function(){line(sel).angle=+this.value;draw();saveDebounced();});
   document.getElementById('wRange').addEventListener('input',function(){line(sel).w=+this.value;draw();saveDebounced();});
+  document.getElementById('rotRange').addEventListener('input',function(){rot=+this.value;applyRot();saveDebounced();});
   document.getElementById('modeSel').addEventListener('change',function(){cfg.mode=+this.value;save();});
   document.getElementById('thresh').addEventListener('change',function(){cfg.threshold=parseFloat(this.value);save();});
 
@@ -347,7 +372,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   }
   function save(){
     var p=cfg.portrait,l=cfg.landscape;
-    var body='mode='+cfg.mode+'&threshold='+cfg.threshold+
+    var body='mode='+cfg.mode+'&threshold='+cfg.threshold+'&rot='+rot+
       '&px='+p.red.x+'&pa='+p.red.angle+'&pw='+p.red.w+'&pon='+(p.red.on?1:0)+
       '&pyx='+p.yellow.x+'&pya='+p.yellow.angle+'&pyw='+p.yellow.w+'&pyon='+(p.yellow.on?1:0)+
       '&lx='+l.red.x+'&la='+l.red.angle+'&lw='+l.red.w+'&lon='+(l.red.on?1:0)+
@@ -375,6 +400,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
         cfg.landscape=j.landscape||cfg.landscape;
         cfg.portrait.yellow.on=1;   /* gelbe Linie immer aktiv */
         cfg.landscape.yellow.on=1;
+        if(typeof j.rot==='number'){rot=j.rot;applyRot();document.getElementById('rotRange').value=rot;}
         volt.textContent=(cfg.voltage>0?cfg.voltage.toFixed(1)+'V':'--.-V');
         document.getElementById('modeSel').value=cfg.mode;
         document.getElementById('thresh').value=cfg.threshold;
