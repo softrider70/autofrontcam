@@ -171,6 +171,24 @@ static void img_rot_set(int deg)
     nvs_config_set_i32("img_rot", (int32_t)deg);
 }
 
+/* Bildparameter (Helligkeit/Kontrast/Saettigung -2..2, Nachtsicht 0/1) */
+static int img_bri = 0, img_con = 0, img_sat = 0, img_night = 0;
+
+static void img_picture_apply(void)
+{
+    camera_set_picture(img_bri, img_con, img_sat);
+    camera_set_night_mode(img_night != 0);
+}
+
+static void img_picture_load(void)
+{
+    img_bri = (int)nvs_config_get_i32("img_bri", 0);
+    img_con = (int)nvs_config_get_i32("img_con", 0);
+    img_sat = (int)nvs_config_get_i32("img_sat", 0);
+    img_night = (int)nvs_config_get_i32("img_night", 0);
+    img_picture_apply();
+}
+
 static esp_err_t api_config_get_handler(httpd_req_t *req)
 {
     char buf[1024];
@@ -180,6 +198,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req)
     snprintf(buf, sizeof(buf),
              "{\"voltage\":%.1f,\"mode\":%d,\"threshold\":%.1f,"
              "\"version\":\"%s\",\"build\":%d,\"rot\":%d,"
+             "\"bri\":%d,\"con\":%d,\"sat\":%d,\"night\":%d,"
              "\"portrait\":{\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
              "\"yellow\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d}},"
              "\"landscape\":{\"red\":{\"x\":%d,\"angle\":%d,\"w\":%d,\"on\":%d},"
@@ -188,6 +207,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req)
              voltage_is_regulated() ? 1 : 0,
              voltage_get_threshold(),
              APP_VERSION_STRING, BUILD_NUMBER, img_rot_get(),
+             img_bri, img_con, img_sat, img_night,
              p_r.x_percent, p_r.angle_deg, p_r.width_px, p_r.enabled ? 1 : 0,
              p_y.x_percent, p_y.angle_deg, p_y.width_px, p_y.enabled ? 1 : 0,
              l_r.x_percent, l_r.angle_deg, l_r.width_px, l_r.enabled ? 1 : 0,
@@ -218,6 +238,17 @@ static esp_err_t api_config_post_handler(httpd_req_t *req)
         voltage_set_threshold((float)atof(tmp));
     if (form_get(body, "rot", tmp, sizeof(tmp)))
         img_rot_set(atoi(tmp));
+
+    /* Bildparameter */
+    if (form_get(body, "bri", tmp, sizeof(tmp))) img_bri = clamp_int(atoi(tmp), -2, 2);
+    if (form_get(body, "con", tmp, sizeof(tmp))) img_con = clamp_int(atoi(tmp), -2, 2);
+    if (form_get(body, "sat", tmp, sizeof(tmp))) img_sat = clamp_int(atoi(tmp), -2, 2);
+    if (form_get(body, "night", tmp, sizeof(tmp))) img_night = atoi(tmp) != 0;
+    nvs_config_set_i32("img_bri", img_bri);
+    nvs_config_set_i32("img_con", img_con);
+    nvs_config_set_i32("img_sat", img_sat);
+    nvs_config_set_i32("img_night", img_night);
+    img_picture_apply();
 
     /* Portrait */
     if (form_get(body, "px", tmp, sizeof(tmp))) p_r.x_percent = clamp_int(atoi(tmp), 0, 100);
@@ -400,6 +431,9 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Kamera init fehlgeschlagen - weiter ohne Kamera");
     }
+
+    /* Bildparameter aus NVS laden und anwenden (Helligkeit/Kontrast/Nachtsicht) */
+    img_picture_load();
 
     /* WiFi initialisieren (AP bei fehlenden Credentials) */
     ESP_LOGI(TAG, "Initialize WiFi...");

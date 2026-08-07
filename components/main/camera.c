@@ -145,6 +145,53 @@ bool camera_is_ready(void)
     return camera_ready;
 }
 
+/* Bildparameter anwenden (Werte werden auf -2..2 begrenzt) */
+esp_err_t camera_set_picture(int brightness, int contrast, int saturation)
+{
+    if (!camera_ready) return ESP_ERR_INVALID_STATE;
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return ESP_ERR_INVALID_STATE;
+
+    if (brightness < -2) brightness = -2;
+    if (brightness > 2)  brightness = 2;
+    if (contrast < -2) contrast = -2;
+    if (contrast > 2)  contrast = 2;
+    if (saturation < -2) saturation = -2;
+    if (saturation > 2)  saturation = 2;
+
+    s->set_brightness(s, brightness);
+    s->set_contrast(s, contrast);
+    s->set_saturation(s, saturation);
+    ESP_LOGI(TAG, "Bild-Parameter: Helligkeit %d, Kontrast %d, Saettigung %d",
+             brightness, contrast, saturation);
+    return ESP_OK;
+}
+
+/* Nachtsicht-Modus: im Normalmodus ist der Gainceiling auf 2x begrenzt
+ * (wenig Rauschen). Fuer wenig Licht wird er deutlich angehoben und die
+ * Belichtungszeit verlaengert, damit dunkle Szenen sichtbar werden. */
+esp_err_t camera_set_night_mode(bool enable)
+{
+    if (!camera_ready) return ESP_ERR_INVALID_STATE;
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return ESP_ERR_INVALID_STATE;
+
+    if (enable) {
+        s->set_gainceiling(s, GAINCEILING_16X);  /* mehr Verstaerkung bei wenig Licht */
+        s->set_aec_value(s, 800);                /* laengere Belichtung (dunkler) */
+        s->set_ae_level(s, 2);
+        s->set_dcw(s, 1);
+        ESP_LOGI(TAG, "Nachtsicht-Modus AN (Gain 16x, Belichtung 800)");
+    } else {
+        s->set_gainceiling(s, GAINCEILING_2X);
+        s->set_aec_value(s, 300);
+        s->set_ae_level(s, 0);
+        s->set_dcw(s, 0);
+        ESP_LOGI(TAG, "Nachtsicht-Modus AUS (Gain 2x, Belichtung 300)");
+    }
+    return ESP_OK;
+}
+
 void camera_get_info(char *out, size_t len)
 {
     if (!out || len == 0) return;

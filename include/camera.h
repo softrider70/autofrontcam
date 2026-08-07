@@ -31,6 +31,12 @@ bool camera_is_ready(void);
 /* Aktuelle Aufloesung und Qualitaet */
 void camera_get_info(char *out, size_t len);
 
+/* Bildparameter setzen (jeweils -2..+2, 0 = neutral) */
+esp_err_t camera_set_picture(int brightness, int contrast, int saturation);
+
+/* Nachtsicht-Modus: hoeherer Gain + laengere Belichtung fuer wenig Licht */
+esp_err_t camera_set_night_mode(bool enable);
+
 #ifdef __cplusplus
 }
 #endif
