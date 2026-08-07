@@ -341,12 +341,13 @@ esp_err_t wifi_init(void)
     if (!wifi_connected) {
         ESP_LOGI(TAG, "Starte AP-Modus (SSID: %s, IP: %s)", WIFI_AP_SSID, WIFI_AP_IP);
 
-        /* AP-Konfiguration */
+        /* AP-Konfiguration - nur EIN Client erlaubt (zwei iPhones gleichzeitig
+         * blockierten frueher den SoftAP-Kanal). */
         wifi_config_t ap_config = {
             .ap = {
                 .ssid_len = strlen(WIFI_AP_SSID),
                 .channel = 1,
-                .max_connection = 4,
+                .max_connection = 1,
                 .authmode = WIFI_AUTH_OPEN,
             },
         };
