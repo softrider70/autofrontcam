@@ -153,16 +153,20 @@ static void stream_capture_once(int fd)
     size_t len = 0;
     if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
         stream_send_all(fd, "HTTP/1.1 500 Internal Server Error\r\n"
+                             "Access-Control-Allow-Origin: *\r\n"
                              "Content-Length: 0\r\nConnection: close\r\n\r\n");
         return;
     }
 
-    char resp[192];
+    char resp[256];
     snprintf(resp, sizeof(resp),
              "HTTP/1.1 200 OK\r\n"
+             "Access-Control-Allow-Origin: *\r\n"
              "Content-Type: image/jpeg\r\n"
              "Content-Disposition: inline; filename=capture.jpg\r\n"
              "Content-Length: %u\r\n"
+             "Cache-Control: no-store, no-cache, must-revalidate\r\n"
+             "Pragma: no-cache\r\n"
              "Connection: close\r\n\r\n", (unsigned)len);
     stream_send_all(fd, resp);
     send(fd, buf, len, 0);
