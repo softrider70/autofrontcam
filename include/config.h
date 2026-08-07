@@ -58,8 +58,8 @@ extern "C" {
 #define CAM_XCLK_FREQ_HZ        16000000    /* 16 MHz: stabileres DVP-Timing (weniger NO-SOI) */
 #define CAM_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define CAM_PIXEL_FORMAT        PIXFORMAT_JPEG
-#define CAM_FRAME_SIZE          FRAMESIZE_SVGA    /* 800x600 */
-#define CAM_JPEG_QUALITY        12
+#define CAM_FRAME_SIZE          FRAMESIZE_VGA   /* 640x480: halb soviel Daten wie SVGA, stabil ueber SoftAP */
+#define CAM_JPEG_QUALITY        16          /* staerkere Kompression -> kleinere Frames (~7KB), kein send-Blocking */
 #define CAM_FB_COUNT            4           /* mehr Puffer = weniger NO-SOI/Ueberlauf */
 
 /* =====================================================================

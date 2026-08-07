@@ -141,7 +141,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 
   function schedule(){
     clearTimeout(streamTimer);
-    streamTimer=setTimeout(pollFrame,110);
+    streamTimer=setTimeout(pollFrame,200);   /* ~5fps reichen fuer die Fahrzeugkante */
   }
 
   /* Watchdog: falls die Kette irgendwo haengt (z.B. iOS stoppt onloadend),

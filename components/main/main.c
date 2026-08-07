@@ -267,6 +267,8 @@ static void start_main_server(void)
     cfg.max_uri_handlers = 16;   /* Web-UI + API + OTA + Portal */
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
+    cfg.send_wait_timeout = 5;   /* s: langsames SoftAP-Senden nicht sofort abbrechen */
+    cfg.recv_wait_timeout = 5;
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &cfg) != ESP_OK) {
