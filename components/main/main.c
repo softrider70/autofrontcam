@@ -97,6 +97,7 @@ static int stream_read_line(int fd, char *line, size_t maxlen)
 static void stream_client_task(void *arg)
 {
     int fd = (int)(intptr_t)arg;
+    uint32_t frame_cnt = 0;
 
     char resp[192];
     snprintf(resp, sizeof(resp),
@@ -106,6 +107,7 @@ static void stream_client_task(void *arg)
              "Cache-Control: no-cache\r\n"
              "Connection: close\r\n\r\n", STREAM_CONTENT_TYPE);
     if (stream_send_all(fd, resp) != 0) {
+        ESP_LOGW(TAG, "Stream: Header-Send fehlgeschlagen");
         close(fd);
         vTaskDelete(NULL);
         return;
@@ -131,8 +133,15 @@ static void stream_client_task(void *arg)
         r = send(fd, buf, len, 0) == (int)len ? 0 : -1;
         camera_fb_return();
         if (r != 0) break;
+
+        frame_cnt++;
+        if ((frame_cnt % 30) == 0) {
+            ESP_LOGI(TAG, "Stream: %u Frames gesendet (letztes %u Bytes)",
+                     (unsigned)frame_cnt, (unsigned)len);
+        }
     }
 
+    ESP_LOGW(TAG, "Stream: Client getrennt nach %u Frames", (unsigned)frame_cnt);
     close(fd);
     vTaskDelete(NULL);
 }
@@ -210,9 +219,11 @@ static void stream_server_task(void *arg)
             stream_capture_once(fd);
             close(fd);
         } else if (strstr(line, "/stream") != NULL) {
+            ESP_LOGI(TAG, "Stream: Multipart-Client verbunden");
             /* Eigenen Task pro Client -> mehrere Verbindungen parallel */
             if (xTaskCreate(stream_client_task, "mjpeg", 4096,
                             (void *)(intptr_t)fd, 5, NULL) != pdPASS) {
+                ESP_LOGE(TAG, "Stream: Client-Task-Erstellung fehlgeschlagen");
                 close(fd);
             }
         } else {

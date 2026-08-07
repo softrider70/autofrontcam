@@ -93,70 +93,43 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var menu=document.getElementById('menu');
   var hint=document.getElementById('hint');
 
-  /* ===== MJPEG-Stream-Client =====
-   * iOS Safari kann multipart/x-mixed-replace NICHT direkt im <img> anzeigen
-   * (daher kam kein Bild, obwohl der Server lief). Wir lesen den Stream per
-   * fetch und setzen jedes JPEG-Frame (SOI..EOI) als Blob auf das <img>. */
-  var streamBuf=new Uint8Array(0);
-  var streamRetry=0;
+  /* ===== Stream-Client =====
+   * iOS Safari rendert multipart/x-mixed-replace im <img> nicht zuverlaessig
+   * (mal nach langer Wartezeit, dann wieder gar nicht). Daher wird der Stream
+   * als Einzelbild-Polling ueber /capture geholt - funktioniert auf jedem
+   * Browser (auch iOS) garantiert. ~8-10 fps reichen fuer die Fahrzeugkante. */
+  var streamHost=window.location.hostname;
+  var streamBusy=false;
+  var streamTimer=null;
+  var lastUrl=null;
 
-  function streamAppend(chunk){
-    var n=streamBuf.length+chunk.length;
-    var tmp=new Uint8Array(n);
-    tmp.set(streamBuf,0);
-    tmp.set(chunk,streamBuf.length);
-    streamBuf=tmp;
-    streamExtract();
-    /* Puffer begrenzen, falls kein EOI gefunden wird */
-    if(streamBuf.length>300000){ streamBuf=streamBuf.slice(streamBuf.length-200000); }
+  function showFrame(blob){
+    if(lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl=URL.createObjectURL(blob);
+    img.src=lastUrl;
   }
 
-  function streamExtract(){
-    for(;;){
-      /* SOI (FF D8) suchen */
-      var soi=-1;
-      for(var i=0;i<streamBuf.length-1;i++){
-        if(streamBuf[i]===0xFF&&streamBuf[i+1]===0xD8){soi=i;break;}
-      }
-      if(soi<0) return;
-      /* EOI (FF D9) nach SOI suchen */
-      var eoi=-1;
-      for(var j=soi+2;j<streamBuf.length-1;j++){
-        if(streamBuf[j]===0xFF&&streamBuf[j+1]===0xD9){eoi=j+1;break;}
-      }
-      if(eoi<0){
-        /* unvollstaendiges Frame: alles vor SOI verwerfen, auf Rest warten */
-        if(soi>0) streamBuf=streamBuf.slice(soi);
-        return;
-      }
-      var frame=streamBuf.slice(soi,eoi+1);
-      streamBuf=streamBuf.slice(eoi+1);
-      var blob=new Blob([frame],{type:'image/jpeg'});
-      img.src=URL.createObjectURL(blob);
-    }
+  function pollFrame(){
+    streamBusy=true;
+    var x=new XMLHttpRequest();
+    /* Cache-Busting, damit iOS nicht die alte Antwort liefert */
+    x.open('GET','http://'+streamHost+':81/capture?r='+Date.now(),true);
+    x.responseType='blob';
+    x.timeout=4000;
+    x.onload=function(){
+      streamBusy=false;
+      if(x.status===200&&x.response){ showFrame(x.response); }
+      schedule();
+    };
+    x.onerror=function(){ streamBusy=false; schedule(); };
+    x.ontimeout=function(){ streamBusy=false; schedule(); };
+    x.send();
   }
-
-  function startStream(){
-    var url='http://'+window.location.hostname+':81/stream';
-    fetch(url).then(function(resp){
-      if(!resp.ok||!resp.body) throw new Error('HTTP '+resp.status);
-      streamRetry=0;
-      var reader=resp.body.getReader();
-      function pump(){
-        return reader.read().then(function(res){
-          if(res.done) return;
-          streamAppend(new Uint8Array(res.value));
-          return pump();
-        });
-      }
-      return pump();
-    }).catch(function(){
-      /* Stream neu verbinden */
-      if(streamRetry<5){streamRetry++;}
-      setTimeout(startStream,2000);
-    });
+  function schedule(){
+    if(streamTimer) clearTimeout(streamTimer);
+    streamTimer=setTimeout(pollFrame,110);
   }
-  startStream();
+  pollFrame();
 
   var cfg={voltage:0,mode:0,threshold:12.8,version:'',build:0,
     portrait:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:1}},
