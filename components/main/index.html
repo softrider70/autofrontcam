@@ -100,8 +100,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
    * Browser (auch iOS) garantiert. ~8-10 fps reichen fuer die Fahrzeugkante. */
   var streamHost=window.location.hostname;
   var streamBusy=false;
+  var streamXHR=null;
   var streamTimer=null;
   var lastUrl=null;
+  var streamLastOk=0;
 
   function showFrame(blob){
     if(lastUrl) URL.revokeObjectURL(lastUrl);
@@ -110,25 +112,42 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   }
 
   function pollFrame(){
+    if(streamBusy) return;      /* laufender Request -> nicht stapeln */
     streamBusy=true;
     var x=new XMLHttpRequest();
+    streamXHR=x;
     /* Cache-Busting, damit iOS nicht die alte Antwort liefert */
     x.open('GET','http://'+streamHost+':81/capture?r='+Date.now(),true);
     x.responseType='blob';
     x.timeout=4000;
-    x.onload=function(){
+    x.onloadend=function(){     /* feuert IMMER (Erfolg/Fehler/Timeout) */
       streamBusy=false;
-      if(x.status===200&&x.response){ showFrame(x.response); }
+      streamXHR=null;
+      if(x.status===200&&x.response&&x.response.size>0){
+        streamLastOk=Date.now();
+        showFrame(x.response);
+      }
       schedule();
     };
-    x.onerror=function(){ streamBusy=false; schedule(); };
-    x.ontimeout=function(){ streamBusy=false; schedule(); };
     x.send();
   }
+
   function schedule(){
-    if(streamTimer) clearTimeout(streamTimer);
+    clearTimeout(streamTimer);
     streamTimer=setTimeout(pollFrame,110);
   }
+
+  /* Watchdog: falls die Kette irgendwo haengt (z.B. iOS stoppt onloadend),
+   * den Request abbrechen und neu starten. */
+  setInterval(function(){
+    if(Date.now()-streamLastOk>5000){
+      if(streamXHR){ try{streamXHR.abort();}catch(e){} }
+      if(streamBusy) streamBusy=false;
+      clearTimeout(streamTimer);
+      schedule();
+    }
+  },2000);
+
   pollFrame();
 
   var cfg={voltage:0,mode:0,threshold:12.8,version:'',build:0,

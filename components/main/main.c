@@ -78,6 +78,20 @@ static int stream_send_all(int fd, const char *s)
     return send(fd, s, len, 0) == (int)len ? 0 : -1;
 }
 
+/* Komplette Binaerdaten senden; send() darf nur Teile senden (TCP-Puffer),
+ * daher in einer Schleife bis alles durch ist. 0 bei Erfolg, -1 bei Fehler. */
+static int stream_send_all_bin(int fd, const void *data, size_t len)
+{
+    const char *p = (const char *)data;
+    while (len > 0) {
+        int n = send(fd, p, len, 0);
+        if (n <= 0) return -1;
+        p += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
 /* HTTP-Request-Zeile einlesen (bis Zeilenende) */
 static int stream_read_line(int fd, char *line, size_t maxlen)
 {
@@ -130,7 +144,7 @@ static void stream_client_task(void *arg)
         if (r != 0) { camera_fb_return(); break; }
         r = stream_send_all(fd, part_hdr);
         if (r != 0) { camera_fb_return(); break; }
-        r = send(fd, buf, len, 0) == (int)len ? 0 : -1;
+        r = stream_send_all_bin(fd, buf, len);
         camera_fb_return();
         if (r != 0) break;
 
@@ -169,7 +183,7 @@ static void stream_capture_once(int fd)
              "Pragma: no-cache\r\n"
              "Connection: close\r\n\r\n", (unsigned)len);
     stream_send_all(fd, resp);
-    send(fd, buf, len, 0);
+    stream_send_all_bin(fd, buf, len);
     camera_fb_return();
 }
 
