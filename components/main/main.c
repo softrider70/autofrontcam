@@ -21,6 +21,8 @@
 #include "esp_ota_ops.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
 
 #include "config.h"
 #include "version.h"
@@ -49,61 +51,6 @@ static const char *STREAM_PART =
     "Content-Length: %u\r\n"
     "X-Timestamp: %lu\r\n\r\n";
 
-static esp_err_t stream_handler(httpd_req_t *req)
-{
-    esp_err_t ret = ESP_OK;
-    uint8_t *buf = NULL;
-    size_t len = 0;
-
-    httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-
-    while (true) {
-        /* Frame aufnehmen */
-        if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
-            ESP_LOGE(TAG, "Capture fehlgeschlagen");
-            vTaskDelay(pdMS_TO_TICKS(10));   /* Busy-Loop vermeiden */
-            continue;
-        }
-
-        /* Boundary + Header senden */
-        char part_hdr[96];
-        snprintf(part_hdr, sizeof(part_hdr), STREAM_PART, (unsigned)len,
-                 (unsigned long)esp_timer_get_time() / 1000000);
-
-        ret = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-        if (ret != ESP_OK) { camera_fb_return(); break; }
-        ret = httpd_resp_send_chunk(req, part_hdr, strlen(part_hdr));
-        if (ret != ESP_OK) { camera_fb_return(); break; }
-
-        /* Bilddaten senden - Frame IMMER freigeben, auch bei Abbruch */
-        ret = httpd_resp_send_chunk(req, (const char *)buf, len);
-        camera_fb_return();
-        if (ret != ESP_OK) break;
-    }
-
-    return ret;
-}
-
-static esp_err_t capture_handler(httpd_req_t *req)
-{
-    uint8_t *buf = NULL;
-    size_t len = 0;
-
-    if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "Capture fehlgeschlagen");
-        return ESP_FAIL;
-    }
-
-    httpd_resp_set_type(req, "image/jpeg");
-    httpd_resp_set_hdr(req, "Content-Disposition",
-                       "inline; filename=capture.jpg");
-    esp_err_t ret = httpd_resp_send(req, (const char *)buf, len);
-    camera_fb_return();
-    return ret;
-}
-
 static esp_err_t root_handler(httpd_req_t *req)
 {
     /* Eingebettete Web-UI (components/main/index.html) */
@@ -116,6 +63,171 @@ static esp_err_t root_handler(httpd_req_t *req)
     httpd_resp_send(req, (const char *)index_html_start,
                     index_html_end - index_html_start);
     return ESP_OK;
+}
+
+/* =====================================================================
+ * MJPEG-Stream: eigener TCP-Server-Task (roher Socket auf MJPEG_PORT).
+ * Laueft NICHT ueber den esp_http_server, damit der Stream nicht dessen
+ * einzigen Task blockiert (iOS baut oft mehrere Verbindungen auf).
+ * ===================================================================== */
+
+/* Kompletten String senden; 0 bei Erfolg, -1 bei Fehler */
+static int stream_send_all(int fd, const char *s)
+{
+    size_t len = strlen(s);
+    return send(fd, s, len, 0) == (int)len ? 0 : -1;
+}
+
+/* HTTP-Request-Zeile einlesen (bis Zeilenende) */
+static int stream_read_line(int fd, char *line, size_t maxlen)
+{
+    size_t n = 0;
+    while (n < maxlen - 1) {
+        char c;
+        int r = recv(fd, &c, 1, 0);
+        if (r <= 0) return -1;
+        if (c == '\n') break;
+        if (c != '\r') line[n++] = c;
+    }
+    line[n] = '\0';
+    return (int)n;
+}
+
+/* MJPEG-Stream an einen verbundenen Client senden (blockiert bis Abbruch) */
+static void stream_client_task(void *arg)
+{
+    int fd = (int)(intptr_t)arg;
+
+    char resp[192];
+    snprintf(resp, sizeof(resp),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: %s\r\n"
+             "Access-Control-Allow-Origin: *\r\n"
+             "Cache-Control: no-cache\r\n"
+             "Connection: close\r\n\r\n", STREAM_CONTENT_TYPE);
+    if (stream_send_all(fd, resp) != 0) {
+        close(fd);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    while (true) {
+        uint8_t *buf = NULL;
+        size_t len = 0;
+        if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        char part_hdr[96];
+        snprintf(part_hdr, sizeof(part_hdr), STREAM_PART, (unsigned)len,
+                 (unsigned long)esp_timer_get_time() / 1000000);
+
+        int r;
+        r = stream_send_all(fd, STREAM_BOUNDARY);
+        if (r != 0) { camera_fb_return(); break; }
+        r = stream_send_all(fd, part_hdr);
+        if (r != 0) { camera_fb_return(); break; }
+        r = send(fd, buf, len, 0) == (int)len ? 0 : -1;
+        camera_fb_return();
+        if (r != 0) break;
+    }
+
+    close(fd);
+    vTaskDelete(NULL);
+}
+
+/* Einzelbild (GET /capture) auf rohem Socket */
+static void stream_capture_once(int fd)
+{
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
+        stream_send_all(fd, "HTTP/1.1 500 Internal Server Error\r\n"
+                             "Content-Length: 0\r\nConnection: close\r\n\r\n");
+        return;
+    }
+
+    char resp[192];
+    snprintf(resp, sizeof(resp),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: image/jpeg\r\n"
+             "Content-Disposition: inline; filename=capture.jpg\r\n"
+             "Content-Length: %u\r\n"
+             "Connection: close\r\n\r\n", (unsigned)len);
+    stream_send_all(fd, resp);
+    send(fd, buf, len, 0);
+    camera_fb_return();
+}
+
+/* Haupttask: lauscht auf MJPEG_PORT und bedient Clients */
+static void stream_server_task(void *arg)
+{
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = htonl(INADDR_ANY);
+    server.sin_port = htons(MJPEG_PORT);
+
+    int lsock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (lsock < 0) {
+        ESP_LOGE(TAG, "Stream-Socket-Erstellung fehlgeschlagen");
+        vTaskDelete(NULL);
+        return;
+    }
+    int opt = 1;
+    setsockopt(lsock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (bind(lsock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+        ESP_LOGE(TAG, "Stream-Bind auf Port %d fehlgeschlagen", MJPEG_PORT);
+        close(lsock);
+        vTaskDelete(NULL);
+        return;
+    }
+    if (listen(lsock, 4) < 0) {
+        ESP_LOGE(TAG, "Stream-Listen fehlgeschlagen");
+        close(lsock);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "MJPEG-Stream-Server auf Port %d gestartet", MJPEG_PORT);
+
+    while (true) {
+        struct sockaddr_in client = {0};
+        socklen_t clen = sizeof(client);
+        int fd = accept(lsock, (struct sockaddr *)&client, &clen);
+        if (fd < 0) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        char line[64];
+        if (stream_read_line(fd, line, sizeof(line)) < 0) {
+            close(fd);
+            continue;
+        }
+
+        if (strstr(line, "/capture") != NULL) {
+            stream_capture_once(fd);
+            close(fd);
+        } else if (strstr(line, "/stream") != NULL) {
+            /* Eigenen Task pro Client -> mehrere Verbindungen parallel */
+            if (xTaskCreate(stream_client_task, "mjpeg", 4096,
+                            (void *)(intptr_t)fd, 5, NULL) != pdPASS) {
+                close(fd);
+            }
+        } else {
+            stream_send_all(fd, "HTTP/1.1 404 Not Found\r\n"
+                                "Content-Length: 0\r\nConnection: close\r\n\r\n");
+            close(fd);
+        }
+    }
+}
+
+static void start_stream_server(void)
+{
+    if (xTaskCreate(stream_server_task, "mjpeg_srv", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Stream-Task-Erstellung fehlgeschlagen");
+    }
 }
 
 /* =====================================================================
@@ -256,37 +368,6 @@ static const httpd_uri_t captive_apple_old = {
     .uri = "/library/test/success.html", .method = HTTP_GET, .handler = captive_handler,
 };
 
-static void start_stream_server(void)
-{
-    /* Eigener Server nur fuer den MJPEG-Stream, damit er die Web-UI/API
-     * nicht blockiert (HTTPD-Blocking-Ursache behoben). */
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.server_port = MJPEG_PORT;
-    cfg.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;  /* eigener Ctrl-Port, sonst EADDRINUSE */
-    cfg.max_uri_handlers = 4;
-    cfg.lru_purge_enable = true;
-    cfg.stack_size = 8192;
-
-    httpd_handle_t server = NULL;
-    if (httpd_start(&server, &cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "Stream-Server Start fehlgeschlagen");
-        return;
-    }
-
-    httpd_uri_t stream = {
-        .uri = "/stream", .method = HTTP_GET, .handler = stream_handler,
-        .user_ctx = NULL
-    };
-    httpd_uri_t capture = {
-        .uri = "/capture", .method = HTTP_GET, .handler = capture_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(server, &stream);
-    httpd_register_uri_handler(server, &capture);
-
-    ESP_LOGI(TAG, "MJPEG-Stream-Server auf Port %d gestartet", MJPEG_PORT);
-}
-
 static void start_main_server(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -335,15 +416,15 @@ static void start_main_server(void)
 }
 
 /* =====================================================================
- * LED-Blinken (Status)
+ * LED: kurzer Boot-Blinker (3x), danach dauerhaft aus
  * ===================================================================== */
-static void led_task(void *pvParameters)
+static void led_boot_blink(void)
 {
-    bool state = LED_OFF;
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        state = !state;
-        gpio_set_level(LED_GPIO, state);
+    for (int i = 0; i < 3; i++) {
+        gpio_set_level(LED_GPIO, LED_ON);
+        vTaskDelay(pdMS_TO_TICKS(120));
+        gpio_set_level(LED_GPIO, LED_OFF);
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
 }
 
@@ -419,12 +500,11 @@ void app_main(void)
     /* Haupt-Webserver (Web-UI + API + OTA + Portal) starten */
     start_main_server();
 
-    /* MJPEG-Stream-Server auf eigenem Port (blockiert die API nicht) */
+    /* MJPEG-Stream-Server auf eigenem Port (eigener Task, blockiert die API nicht) */
     start_stream_server();
 
-    /* LED-Task */
-    xTaskCreate(led_task, "led", TASK_STACK_MONITOR, NULL,
-                TASK_PRIORITY_MONITOR, NULL);
+    /* Kurzer Boot-Blinker (3x), danach LED aus */
+    led_boot_blink();
 
     /* Erste Spannungsmessung fuer den Log */
     float batt = voltage_read_batt();

@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_camera.h"
 #include "config.h"
@@ -16,6 +18,7 @@ static const char *TAG = "CAM";
 
 static bool camera_ready = false;
 static camera_fb_t *fb = NULL;
+static SemaphoreHandle_t cam_mutex = NULL;   /* schuetzt Frame-Zugriff (Stream/Capture) */
 
 /* ESP32-CAM (AI-Thinker) Sensor-Pin-Konfiguration */
 static camera_config_t cam_config = {
@@ -51,6 +54,11 @@ static camera_config_t cam_config = {
 
 esp_err_t camera_init(void)
 {
+    cam_mutex = xSemaphoreCreateMutex();
+    if (!cam_mutex) {
+        ESP_LOGE(TAG, "Kamera-Mutex-Erstellung fehlgeschlagen");
+    }
+
     esp_err_t ret = esp_camera_init(&cam_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_camera_init fehlgeschlagen: %s (0x%x)",
@@ -97,6 +105,9 @@ esp_err_t camera_capture_jpeg(uint8_t **buf, size_t *len)
     if (!camera_ready || !buf || !len) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (cam_mutex && xSemaphoreTake(cam_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
 
     /* Altes Frame freigeben, falls vorhanden */
     camera_fb_return();
@@ -104,6 +115,7 @@ esp_err_t camera_capture_jpeg(uint8_t **buf, size_t *len)
     fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Frame-Capture fehlgeschlagen");
+        if (cam_mutex) xSemaphoreGive(cam_mutex);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -118,6 +130,7 @@ void camera_fb_return(void)
         esp_camera_fb_return(fb);
         fb = NULL;
     }
+    if (cam_mutex) xSemaphoreGive(cam_mutex);
 }
 
 bool camera_is_ready(void)
