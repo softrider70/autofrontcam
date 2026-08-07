@@ -97,6 +97,47 @@ esp_err_t nvs_config_set_u8(const char *key, uint8_t val)
     return ret;
 }
 
+/* int32 Wert lesen (mit Default) */
+int32_t nvs_config_get_i32(const char *key, int32_t default_val)
+{
+    if (!nvs_initialized) {
+        return default_val;
+    }
+
+    int32_t value = 0;
+    esp_err_t ret = nvs_get_i32(nvs_handle_store, key, &value);
+    if (ret != ESP_OK) {
+        if (ret != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "nvs_get_i32(%s) fehlgeschlagen: %s",
+                     key, esp_err_to_name(ret));
+        }
+        return default_val;
+    }
+    return value;
+}
+
+/* int32 Wert schreiben */
+esp_err_t nvs_config_set_i32(const char *key, int32_t val)
+{
+    if (!nvs_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t ret = nvs_set_i32(nvs_handle_store, key, val);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_i32(%s) fehlgeschlagen: %s",
+                 key, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_commit(nvs_handle_store);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_commit fehlgeschlagen: %s",
+                 esp_err_to_name(ret));
+    }
+    return ret;
+}
+
 /* String Wert lesen (mit Default) - returned malloced string */
 char* nvs_config_get_str(const char *key, const char *default_val)
 {

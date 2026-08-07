@@ -156,20 +156,19 @@ static int clamp_int(int v, int lo, int hi)
     return v;
 }
 
-/* Bild-Neigungswinkel in NVS (u8, -45..45 -> Offset 45) */
-#define IMG_ROT_MIN   (-45)
-#define IMG_ROT_MAX   (45)
-#define IMG_ROT_OFFSET 45
+/* Bild-Neigungswinkel in NVS (i32, -180..180) */
+#define IMG_ROT_MIN   (-180)
+#define IMG_ROT_MAX   (180)
 
 static int img_rot_get(void)
 {
-    return (int)nvs_config_get_u8("img_rot", IMG_ROT_OFFSET) - IMG_ROT_OFFSET;
+    return (int)nvs_config_get_i32("img_rot", 0);
 }
 
 static void img_rot_set(int deg)
 {
     deg = clamp_int(deg, IMG_ROT_MIN, IMG_ROT_MAX);
-    nvs_config_set_u8("img_rot", (uint8_t)(deg + IMG_ROT_OFFSET));
+    nvs_config_set_i32("img_rot", (int32_t)deg);
 }
 
 static esp_err_t api_config_get_handler(httpd_req_t *req)

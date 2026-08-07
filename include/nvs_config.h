@@ -12,6 +12,8 @@
 esp_err_t nvs_config_init(void);
 uint8_t nvs_config_get_u8(const char *key, uint8_t default_val);
 esp_err_t nvs_config_set_u8(const char *key, uint8_t val);
+int32_t nvs_config_get_i32(const char *key, int32_t default_val);
+esp_err_t nvs_config_set_i32(const char *key, int32_t val);
 char* nvs_config_get_str(const char *key, const char *default_val);
 esp_err_t nvs_config_set_str(const char *key, const char *val);
 
