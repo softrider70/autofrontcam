@@ -145,7 +145,12 @@ bool camera_is_ready(void)
     return camera_ready;
 }
 
-/* Bildparameter anwenden (Werte werden auf -2..2 begrenzt) */
+/* Bildparameter anwenden (Werte werden auf -2..2 begrenzt).
+ * WICHTIG (OV2640): Bei aktiver Auto-Exposure (AEC)/Auto-Gain (AGC) werden
+ * die DSP-Register fuer Helligkeit (0x09) und Kontrast (0x07) automatisch
+ * ausgeregelt und sind kaum sichtbar. Zuverlaessig wirkt dagegen das
+ * Belichtungsziel set_ae_level() - das verschiebt die Helligkeit trotz
+ * Auto-Exposure sichtbar. Wir setzen daher BEIDES: DSP-Register + AE-Level. */
 esp_err_t camera_set_picture(int brightness, int contrast, int saturation)
 {
     if (!camera_ready) return ESP_ERR_INVALID_STATE;
@@ -162,8 +167,11 @@ esp_err_t camera_set_picture(int brightness, int contrast, int saturation)
     s->set_brightness(s, brightness);
     s->set_contrast(s, contrast);
     s->set_saturation(s, saturation);
-    ESP_LOGI(TAG, "Bild-Parameter: Helligkeit %d, Kontrast %d, Saettigung %d",
-             brightness, contrast, saturation);
+    /* Helligkeit sichtbar machen: Belichtungsziel der Auto-Exposure
+     * verschieben (-2 = dunkler, +2 = heller). */
+    s->set_ae_level(s, brightness);
+    ESP_LOGI(TAG, "Bild-Parameter: Helligkeit %d, Kontrast %d, Saettigung %d, AE-Level %d",
+             brightness, contrast, saturation, brightness);
     return ESP_OK;
 }
 
