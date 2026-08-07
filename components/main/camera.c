@@ -100,6 +100,16 @@ esp_err_t camera_init(void)
     return ESP_OK;
 }
 
+/* Nur das Frame-Objekt freigeben (OHNE Mutex-Freigabe) - intern fuer die
+ * Neuaufnahme unter gehaltenem Mutex. */
+static void camera_release_fb(void)
+{
+    if (fb) {
+        esp_camera_fb_return(fb);
+        fb = NULL;
+    }
+}
+
 esp_err_t camera_capture_jpeg(uint8_t **buf, size_t *len)
 {
     if (!camera_ready || !buf || !len) {
@@ -109,8 +119,8 @@ esp_err_t camera_capture_jpeg(uint8_t **buf, size_t *len)
         return ESP_ERR_TIMEOUT;
     }
 
-    /* Altes Frame freigeben, falls vorhanden */
-    camera_fb_return();
+    /* Altes Frame freigeben, falls vorhanden (Mutex bleibt gehalten) */
+    camera_release_fb();
 
     fb = esp_camera_fb_get();
     if (!fb) {
@@ -126,10 +136,7 @@ esp_err_t camera_capture_jpeg(uint8_t **buf, size_t *len)
 
 void camera_fb_return(void)
 {
-    if (fb) {
-        esp_camera_fb_return(fb);
-        fb = NULL;
-    }
+    camera_release_fb();
     if (cam_mutex) xSemaphoreGive(cam_mutex);
 }
 
