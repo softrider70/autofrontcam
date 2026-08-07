@@ -26,6 +26,7 @@ idf_component_register(
         esp_driver_gpio
         esp_adc
         esp_hw_support
+        heap
         esp32-camera
 )
 

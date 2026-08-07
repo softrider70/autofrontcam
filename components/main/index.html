@@ -20,6 +20,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 #hint{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);color:#ccc;
   font:13px sans-serif;text-shadow:0 0 3px #000;background:rgba(0,0,0,0.5);
   padding:5px 12px;border-radius:14px;z-index:20;pointer-events:none;display:none}
+#busy{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#ffcc00;
+  font:bold 18px sans-serif;text-align:center;text-shadow:0 0 6px #000;
+  background:rgba(0,0,0,0.75);padding:16px 24px;border:1px solid #ffcc00;
+  border-radius:12px;z-index:25;display:none;pointer-events:none}
 #menu{position:fixed;inset:0;display:none;z-index:10}
 #menu.show{display:block}
 #ctrl{position:absolute;left:12px;top:50%;transform:translateY(-50%);
@@ -51,6 +55,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
 <canvas id="ov"></canvas>
 <div id="ver"></div>
 <div id="volt">--.-V</div>
+<div id="busy">⚠ Anderes Gerät<br>empfängt den Stream</div>
 <div id="hint">Tippe auf den Bildschirm für Menü</div>
 
 <div id="menu">
@@ -92,6 +97,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var volt=document.getElementById('volt');
   var menu=document.getElementById('menu');
   var hint=document.getElementById('hint');
+  var busy=document.getElementById('busy');
 
   /* ===== Stream-Client =====
    * iOS Safari rendert multipart/x-mixed-replace im <img> nicht zuverlaessig
@@ -125,7 +131,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
       streamXHR=null;
       if(x.status===200&&x.response&&x.response.size>0){
         streamLastOk=Date.now();
+        busy.style.display='none';
         showFrame(x.response);
+      } else if(x.status===503){
+        busy.style.display='block';   /* anderes Geraet bedient den Stream */
       }
       schedule();
     };

@@ -21,6 +21,7 @@
 #include "esp_ota_ops.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 
@@ -96,17 +97,38 @@ static int stream_read_line(int fd, char *line, size_t maxlen)
     return (int)n;
 }
 
-/* Einzelbild (GET /capture) auf rohem Socket */
-static void stream_capture_once(int fd)
+/* Einzelbild (GET /capture) als eigener Task pro Client.
+ * WICHTIG: das Frame wird sofort in einen PSRAM-Puffer kopiert und der
+ * Kamera-Mutex danach freigegeben - das langsame Senden an den Client
+ * blockiert damit NICHT den Mutex. */
+static void stream_capture_task(void *arg)
 {
+    int fd = (int)(intptr_t)arg;
+
     uint8_t *buf = NULL;
     size_t len = 0;
     if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
         stream_send_all(fd, "HTTP/1.1 500 Internal Server Error\r\n"
                              "Access-Control-Allow-Origin: *\r\n"
                              "Content-Length: 0\r\nConnection: close\r\n\r\n");
+        close(fd);
+        vTaskDelete(NULL);
         return;
     }
+
+    /* Frame in PSRAM kopieren und Mutex sofort freigeben */
+    uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!copy) {
+        camera_fb_return();
+        stream_send_all(fd, "HTTP/1.1 500 Internal Server Error\r\n"
+                             "Access-Control-Allow-Origin: *\r\n"
+                             "Content-Length: 0\r\nConnection: close\r\n\r\n");
+        close(fd);
+        vTaskDelete(NULL);
+        return;
+    }
+    memcpy(copy, buf, len);
+    camera_fb_return();   /* Mutex ist jetzt wieder frei */
 
     char resp[256];
     snprintf(resp, sizeof(resp),
@@ -119,9 +141,18 @@ static void stream_capture_once(int fd)
              "Pragma: no-cache\r\n"
              "Connection: close\r\n\r\n", (unsigned)len);
     stream_send_all(fd, resp);
-    stream_send_all_bin(fd, buf, len);
-    camera_fb_return();
+    stream_send_all_bin(fd, copy, len);
+    heap_caps_free(copy);
+    close(fd);
+    vTaskDelete(NULL);
 }
+
+/* Nur EIN Client (iPhones) wird bedient. Der erste, der sich meldet, behaelt
+ * den Stream; andere bekommen 503 (ueberlast). Nach 10s ohne Anfrage von der
+ * aktiven IP kann ein anderes Geraet uebernehmen. */
+#define STREAM_OWNER_TIMEOUT_MS  10000
+static uint32_t stream_owner_ip = 0;
+static int64_t stream_owner_last = 0;
 
 /* Haupttask: lauscht auf MJPEG_PORT und bedient /capture */
 static void stream_server_task(void *arg)
@@ -164,7 +195,7 @@ static void stream_server_task(void *arg)
         }
 
         /* Send-Timeout: ein langsam lesender/verwaister Client darf send()
-         * nie dauerhaft blockieren (haelt sonst den Kamera-Mutex fest). */
+         * nie dauerhaft blockieren. */
         struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
@@ -175,8 +206,30 @@ static void stream_server_task(void *arg)
         }
 
         if (strstr(line, "/capture") != NULL) {
-            stream_capture_once(fd);
-            close(fd);
+            uint32_t cip = client.sin_addr.s_addr;
+            int64_t now = esp_timer_get_time() / 1000;   /* ms */
+
+            if (stream_owner_ip == 0 ||
+                stream_owner_ip == cip ||
+                (now - stream_owner_last) > STREAM_OWNER_TIMEOUT_MS) {
+                /* Dieses Geraet darf den Stream nutzen */
+                stream_owner_ip = cip;
+                stream_owner_last = now;
+
+                if (xTaskCreate(stream_capture_task, "cap", 4096,
+                                (void *)(intptr_t)fd, 5, NULL) != pdPASS) {
+                    close(fd);
+                }
+            } else {
+                /* Anderes Geraet aktiv -> Ueberlast (503) */
+                ESP_LOGW(TAG, "Stream belegt durch anderes Geraet (IP %d.%d.%d.%d)",
+                         (int)((cip >> 0) & 0xFF), (int)((cip >> 8) & 0xFF),
+                         (int)((cip >> 16) & 0xFF), (int)((cip >> 24) & 0xFF));
+                stream_send_all(fd, "HTTP/1.1 503 Service Unavailable\r\n"
+                                    "Access-Control-Allow-Origin: *\r\n"
+                                    "Content-Length: 0\r\nConnection: close\r\n\r\n");
+                close(fd);
+            }
         } else {
             stream_send_all(fd, "HTTP/1.1 404 Not Found\r\n"
                                 "Content-Length: 0\r\nConnection: close\r\n\r\n");
