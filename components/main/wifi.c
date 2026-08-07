@@ -97,6 +97,31 @@ static esp_err_t portal_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* URL-Decodierung (Formularwerte): '+', = Leerzeichen, '%XX' = Sonderzeichen */
+static void url_decode(char *out, size_t out_size, const char *in)
+{
+    size_t o = 0;
+    while (*in && o + 1 < out_size) {
+        if (*in == '%' && in[1] && in[2]) {
+            char hi = in[1], lo = in[2];
+            int h = (hi >= '0' && hi <= '9') ? hi - '0' :
+                    (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 :
+                    (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : -1;
+            int l = (lo >= '0' && lo <= '9') ? lo - '0' :
+                    (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 :
+                    (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : -1;
+            if (h >= 0 && l >= 0) {
+                out[o++] = (char)(h * 16 + l);
+                in += 3;
+                continue;
+            }
+        }
+        out[o++] = (*in == '+') ? ' ' : *in;
+        in++;
+    }
+    out[o] = '\0';
+}
+
 static esp_err_t portal_save_handler(httpd_req_t *req)
 {
     char content[256];
@@ -116,7 +141,7 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     }
     content[ret] = '\0';
 
-    /* SSID und Passwort parsen */
+    /* SSID und Passwort parsen (URL-dekodiert) */
     char ssid[64] = {0};
     char password[64] = {0};
 
@@ -131,9 +156,9 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
             char *val = eq + 1;
 
             if (strncmp(param, "ssid", 4) == 0) {
-                strncpy(ssid, val, sizeof(ssid) - 1);
+                url_decode(ssid, sizeof(ssid), val);
             } else if (strncmp(param, "password", 8) == 0) {
-                strncpy(password, val, sizeof(password) - 1);
+                url_decode(password, sizeof(password), val);
             }
         }
 

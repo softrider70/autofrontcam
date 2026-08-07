@@ -62,6 +62,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
         /* Frame aufnehmen */
         if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
             ESP_LOGE(TAG, "Capture fehlgeschlagen");
+            vTaskDelay(pdMS_TO_TICKS(10));   /* Busy-Loop vermeiden */
             continue;
         }
 
@@ -71,11 +72,11 @@ static esp_err_t stream_handler(httpd_req_t *req)
                  (unsigned long)esp_timer_get_time() / 1000000);
 
         ret = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-        if (ret != ESP_OK) break;
+        if (ret != ESP_OK) { camera_fb_return(); break; }
         ret = httpd_resp_send_chunk(req, part_hdr, strlen(part_hdr));
-        if (ret != ESP_OK) break;
+        if (ret != ESP_OK) { camera_fb_return(); break; }
 
-        /* Bilddaten senden */
+        /* Bilddaten senden - Frame IMMER freigeben, auch bei Abbruch */
         ret = httpd_resp_send_chunk(req, (const char *)buf, len);
         camera_fb_return();
         if (ret != ESP_OK) break;
