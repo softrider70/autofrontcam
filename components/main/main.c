@@ -55,97 +55,10 @@ static esp_err_t root_handler(httpd_req_t *req)
 }
 
 /* =====================================================================
- * Einzelbild-Server: eigener TCP-Server-Task (roher Socket auf MJPEG_PORT).
- * Die Web-UI holt Frames per /capture-Polling (iOS kann multipart nicht
- * zuverlaessig rendern). Kein Multipart-/stream mehr - wuerde sonst bei
- * verwaisten Clients den Kamera-Mutex blockieren.
+ * Einzelbild (GET /capture) auf dem HTTPD-Haupt-Server (Port 80).
+ * Ein einzelnes JPEG ist kurz (ms) und blockiert den httpd nicht (anders
+ * als ein Endlos-MJPEG-Stream). Gleicher Origin wie die Web-UI -> kein CORS.
  * ===================================================================== */
-
-/* Kompletten String senden; 0 bei Erfolg, -1 bei Fehler */
-static int stream_send_all(int fd, const char *s)
-{
-    size_t len = strlen(s);
-    return send(fd, s, len, 0) == (int)len ? 0 : -1;
-}
-
-/* Komplette Binaerdaten senden; send() darf nur Teile senden (TCP-Puffer),
- * daher in einer Schleife bis alles durch ist. 0 bei Erfolg, -1 bei Fehler. */
-static int stream_send_all_bin(int fd, const void *data, size_t len)
-{
-    const char *p = (const char *)data;
-    while (len > 0) {
-        int n = send(fd, p, len, 0);
-        if (n <= 0) return -1;
-        p += n;
-        len -= (size_t)n;
-    }
-    return 0;
-}
-
-/* HTTP-Request-Zeile einlesen (bis Zeilenende) */
-static int stream_read_line(int fd, char *line, size_t maxlen)
-{
-    size_t n = 0;
-    while (n < maxlen - 1) {
-        char c;
-        int r = recv(fd, &c, 1, 0);
-        if (r <= 0) return -1;
-        if (c == '\n') break;
-        if (c != '\r') line[n++] = c;
-    }
-    line[n] = '\0';
-    return (int)n;
-}
-
-/* Einzelbild (GET /capture) als eigener Task pro Client.
- * WICHTIG: das Frame wird sofort in einen PSRAM-Puffer kopiert und der
- * Kamera-Mutex danach freigegeben - das langsame Senden an den Client
- * blockiert damit NICHT den Mutex. */
-static void stream_capture_task(void *arg)
-{
-    int fd = (int)(intptr_t)arg;
-
-    uint8_t *buf = NULL;
-    size_t len = 0;
-    if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
-        stream_send_all(fd, "HTTP/1.1 500 Internal Server Error\r\n"
-                             "Access-Control-Allow-Origin: *\r\n"
-                             "Content-Length: 0\r\nConnection: close\r\n\r\n");
-        close(fd);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    /* Frame in PSRAM kopieren und Mutex sofort freigeben */
-    uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
-    if (!copy) {
-        camera_fb_return();
-        stream_send_all(fd, "HTTP/1.1 500 Internal Server Error\r\n"
-                             "Access-Control-Allow-Origin: *\r\n"
-                             "Content-Length: 0\r\nConnection: close\r\n\r\n");
-        close(fd);
-        vTaskDelete(NULL);
-        return;
-    }
-    memcpy(copy, buf, len);
-    camera_fb_return();   /* Mutex ist jetzt wieder frei */
-
-    char resp[256];
-    snprintf(resp, sizeof(resp),
-             "HTTP/1.1 200 OK\r\n"
-             "Access-Control-Allow-Origin: *\r\n"
-             "Content-Type: image/jpeg\r\n"
-             "Content-Disposition: inline; filename=capture.jpg\r\n"
-             "Content-Length: %u\r\n"
-             "Cache-Control: no-store, no-cache, must-revalidate\r\n"
-             "Pragma: no-cache\r\n"
-             "Connection: close\r\n\r\n", (unsigned)len);
-    stream_send_all(fd, resp);
-    stream_send_all_bin(fd, copy, len);
-    heap_caps_free(copy);
-    close(fd);
-    vTaskDelete(NULL);
-}
 
 /* Nur EIN Client (iPhones) wird bedient. Der erste, der sich meldet, behaelt
  * den Stream; andere bekommen 503 (ueberlast). Nach 10s ohne Anfrage von der
@@ -154,95 +67,59 @@ static void stream_capture_task(void *arg)
 static uint32_t stream_owner_ip = 0;
 static int64_t stream_owner_last = 0;
 
-/* Haupttask: lauscht auf MJPEG_PORT und bedient /capture */
-static void stream_server_task(void *arg)
+static esp_err_t capture_handler(httpd_req_t *req)
 {
-    struct sockaddr_in server = {0};
-    server.sin_family = AF_INET;
-    server.sin_addr.s_addr = htonl(INADDR_ANY);
-    server.sin_port = htons(MJPEG_PORT);
+    uint8_t *buf = NULL;
+    size_t len = 0;
 
-    int lsock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (lsock < 0) {
-        ESP_LOGE(TAG, "Stream-Socket-Erstellung fehlgeschlagen");
-        vTaskDelete(NULL);
-        return;
+    /* Nur ein Geraet bedienen (Owner-Logik) */
+    int sock = httpd_req_to_sockfd(req);
+    struct sockaddr_in addr = {0};
+    socklen_t addrlen = sizeof(addr);
+    uint32_t cip = 0;
+    if (getpeername(sock, (struct sockaddr *)&addr, &addrlen) == 0) {
+        cip = addr.sin_addr.s_addr;
     }
-    int opt = 1;
-    setsockopt(lsock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    if (bind(lsock, (struct sockaddr *)&server, sizeof(server)) < 0) {
-        ESP_LOGE(TAG, "Stream-Bind auf Port %d fehlgeschlagen", MJPEG_PORT);
-        close(lsock);
-        vTaskDelete(NULL);
-        return;
-    }
-    if (listen(lsock, 4) < 0) {
-        ESP_LOGE(TAG, "Stream-Listen fehlgeschlagen");
-        close(lsock);
-        vTaskDelete(NULL);
-        return;
+    int64_t now = esp_timer_get_time() / 1000;   /* ms */
+
+    if (stream_owner_ip != 0 && stream_owner_ip != cip &&
+        (now - stream_owner_last) <= STREAM_OWNER_TIMEOUT_MS) {
+        /* Anderes Geraet aktiv -> Ueberlast (503) */
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "MJPEG-Einzelbild-Server auf Port %d gestartet", MJPEG_PORT);
+    /* Dieses Geraet darf den Stream nutzen */
+    stream_owner_ip = cip;
+    stream_owner_last = now;
 
-    while (true) {
-        struct sockaddr_in client = {0};
-        socklen_t clen = sizeof(client);
-        int fd = accept(lsock, (struct sockaddr *)&client, &clen);
-        if (fd < 0) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            continue;
-        }
-
-        /* Send-Timeout: ein langsam lesender/verwaister Client darf send()
-         * nie dauerhaft blockieren. */
-        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        char line[64];
-        if (stream_read_line(fd, line, sizeof(line)) < 0) {
-            close(fd);
-            continue;
-        }
-
-        if (strstr(line, "/capture") != NULL) {
-            uint32_t cip = client.sin_addr.s_addr;
-            int64_t now = esp_timer_get_time() / 1000;   /* ms */
-
-            if (stream_owner_ip == 0 ||
-                stream_owner_ip == cip ||
-                (now - stream_owner_last) > STREAM_OWNER_TIMEOUT_MS) {
-                /* Dieses Geraet darf den Stream nutzen */
-                stream_owner_ip = cip;
-                stream_owner_last = now;
-
-                if (xTaskCreate(stream_capture_task, "cap", 4096,
-                                (void *)(intptr_t)fd, 5, NULL) != pdPASS) {
-                    close(fd);
-                }
-            } else {
-                /* Anderes Geraet aktiv -> Ueberlast (503) */
-                ESP_LOGW(TAG, "Stream belegt durch anderes Geraet (IP %d.%d.%d.%d)",
-                         (int)((cip >> 0) & 0xFF), (int)((cip >> 8) & 0xFF),
-                         (int)((cip >> 16) & 0xFF), (int)((cip >> 24) & 0xFF));
-                stream_send_all(fd, "HTTP/1.1 503 Service Unavailable\r\n"
-                                    "Access-Control-Allow-Origin: *\r\n"
-                                    "Content-Length: 0\r\nConnection: close\r\n\r\n");
-                close(fd);
-            }
-        } else {
-            stream_send_all(fd, "HTTP/1.1 404 Not Found\r\n"
-                                "Content-Length: 0\r\nConnection: close\r\n\r\n");
-            close(fd);
-        }
+    if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Capture fehlgeschlagen");
+        return ESP_FAIL;
     }
-}
 
-static void start_stream_server(void)
-{
-    if (xTaskCreate(stream_server_task, "mjpeg_srv", 4096, NULL, 5, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "Stream-Task-Erstellung fehlgeschlagen");
+    /* Frame kopieren und Mutex sofort freigeben (langsames Senden blockiert
+     * den Kamera-Mutex nicht) */
+    uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!copy) {
+        camera_fb_return();
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
     }
+    memcpy(copy, buf, len);
+    camera_fb_return();
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition",
+                       "inline; filename=capture.jpg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    esp_err_t ret = httpd_resp_send(req, (const char *)copy, len);
+    heap_caps_free(copy);
+    return ret;
 }
 
 /* =====================================================================
@@ -401,6 +278,10 @@ static void start_main_server(void)
         .uri = "/", .method = HTTP_GET, .handler = root_handler,
         .user_ctx = NULL
     };
+    httpd_uri_t capture = {
+        .uri = "/capture", .method = HTTP_GET, .handler = capture_handler,
+        .user_ctx = NULL
+    };
     httpd_uri_t api_get = {
         .uri = "/api/config", .method = HTTP_GET, .handler = api_config_get_handler,
         .user_ctx = NULL
@@ -410,6 +291,7 @@ static void start_main_server(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(server, &root);
+    httpd_register_uri_handler(server, &capture);
     httpd_register_uri_handler(server, &api_get);
     httpd_register_uri_handler(server, &api_post);
 
@@ -512,11 +394,8 @@ void app_main(void)
     ESP_LOGI(TAG, "Start OTA webserver...");
     ota_init();
 
-    /* Haupt-Webserver (Web-UI + API + OTA + Portal) starten */
+    /* Haupt-Webserver (Web-UI + API + /capture + OTA + Portal) starten */
     start_main_server();
-
-    /* MJPEG-Stream-Server auf eigenem Port (eigener Task, blockiert die API nicht) */
-    start_stream_server();
 
     /* Kurzer Boot-Blinker (3x), danach LED aus */
     led_boot_blink();

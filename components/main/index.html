@@ -100,11 +100,9 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var busy=document.getElementById('busy');
 
   /* ===== Stream-Client =====
-   * iOS Safari rendert multipart/x-mixed-replace im <img> nicht zuverlaessig
-   * (mal nach langer Wartezeit, dann wieder gar nicht). Daher wird der Stream
-   * als Einzelbild-Polling ueber /capture geholt - funktioniert auf jedem
-   * Browser (auch iOS) garantiert. ~8-10 fps reichen fuer die Fahrzeugkante. */
-  var streamHost=window.location.hostname;
+   * iOS Safari rendert multipart/x-mixed-replace im <img> nicht zuverlaessig.
+   * Daher holt die Web-UI Einzelbilder per /capture vom gleichen Server
+   * (Port 80, gleicher Origin -> kein CORS, kein Blocking). ~8-10 fps. */
   var streamBusy=false;
   var streamXHR=null;
   var streamTimer=null;
@@ -123,7 +121,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     var x=new XMLHttpRequest();
     streamXHR=x;
     /* Cache-Busting, damit iOS nicht die alte Antwort liefert */
-    x.open('GET','http://'+streamHost+':81/capture?r='+Date.now(),true);
+    x.open('GET','/capture?r='+Date.now(),true);   /* gleicher Server (Port 80) */
     x.responseType='blob';
     x.timeout=4000;
     x.onloadend=function(){     /* feuert IMMER (Erfolg/Fehler/Timeout) */
