@@ -39,18 +39,6 @@
 
 static const char *TAG = "AUTOCAM";
 
-/* =====================================================================
- * MJPEG-Stream: Boundary fuer Multipart-Antwort
- * ===================================================================== */
-#define PART_BOUNDARY "123456789000000000000987654321"
-static const char *STREAM_CONTENT_TYPE =
-    "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
-static const char *STREAM_BOUNDARY = "--" PART_BOUNDARY "\r\n";
-static const char *STREAM_PART =
-    "Content-Type: image/jpeg\r\n"
-    "Content-Length: %u\r\n"
-    "X-Timestamp: %lu\r\n\r\n";
-
 static esp_err_t root_handler(httpd_req_t *req)
 {
     /* Eingebettete Web-UI (components/main/index.html) */
@@ -66,9 +54,10 @@ static esp_err_t root_handler(httpd_req_t *req)
 }
 
 /* =====================================================================
- * MJPEG-Stream: eigener TCP-Server-Task (roher Socket auf MJPEG_PORT).
- * Laueft NICHT ueber den esp_http_server, damit der Stream nicht dessen
- * einzigen Task blockiert (iOS baut oft mehrere Verbindungen auf).
+ * Einzelbild-Server: eigener TCP-Server-Task (roher Socket auf MJPEG_PORT).
+ * Die Web-UI holt Frames per /capture-Polling (iOS kann multipart nicht
+ * zuverlaessig rendern). Kein Multipart-/stream mehr - wuerde sonst bei
+ * verwaisten Clients den Kamera-Mutex blockieren.
  * ===================================================================== */
 
 /* Kompletten String senden; 0 bei Erfolg, -1 bei Fehler */
@@ -107,59 +96,6 @@ static int stream_read_line(int fd, char *line, size_t maxlen)
     return (int)n;
 }
 
-/* MJPEG-Stream an einen verbundenen Client senden (blockiert bis Abbruch) */
-static void stream_client_task(void *arg)
-{
-    int fd = (int)(intptr_t)arg;
-    uint32_t frame_cnt = 0;
-
-    char resp[192];
-    snprintf(resp, sizeof(resp),
-             "HTTP/1.1 200 OK\r\n"
-             "Content-Type: %s\r\n"
-             "Access-Control-Allow-Origin: *\r\n"
-             "Cache-Control: no-cache\r\n"
-             "Connection: close\r\n\r\n", STREAM_CONTENT_TYPE);
-    if (stream_send_all(fd, resp) != 0) {
-        ESP_LOGW(TAG, "Stream: Header-Send fehlgeschlagen");
-        close(fd);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    while (true) {
-        uint8_t *buf = NULL;
-        size_t len = 0;
-        if (camera_capture_jpeg(&buf, &len) != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        char part_hdr[96];
-        snprintf(part_hdr, sizeof(part_hdr), STREAM_PART, (unsigned)len,
-                 (unsigned long)esp_timer_get_time() / 1000000);
-
-        int r;
-        r = stream_send_all(fd, STREAM_BOUNDARY);
-        if (r != 0) { camera_fb_return(); break; }
-        r = stream_send_all(fd, part_hdr);
-        if (r != 0) { camera_fb_return(); break; }
-        r = stream_send_all_bin(fd, buf, len);
-        camera_fb_return();
-        if (r != 0) break;
-
-        frame_cnt++;
-        if ((frame_cnt % 30) == 0) {
-            ESP_LOGI(TAG, "Stream: %u Frames gesendet (letztes %u Bytes)",
-                     (unsigned)frame_cnt, (unsigned)len);
-        }
-    }
-
-    ESP_LOGW(TAG, "Stream: Client getrennt nach %u Frames", (unsigned)frame_cnt);
-    close(fd);
-    vTaskDelete(NULL);
-}
-
 /* Einzelbild (GET /capture) auf rohem Socket */
 static void stream_capture_once(int fd)
 {
@@ -187,7 +123,7 @@ static void stream_capture_once(int fd)
     camera_fb_return();
 }
 
-/* Haupttask: lauscht auf MJPEG_PORT und bedient Clients */
+/* Haupttask: lauscht auf MJPEG_PORT und bedient /capture */
 static void stream_server_task(void *arg)
 {
     struct sockaddr_in server = {0};
@@ -216,7 +152,7 @@ static void stream_server_task(void *arg)
         return;
     }
 
-    ESP_LOGI(TAG, "MJPEG-Stream-Server auf Port %d gestartet", MJPEG_PORT);
+    ESP_LOGI(TAG, "MJPEG-Einzelbild-Server auf Port %d gestartet", MJPEG_PORT);
 
     while (true) {
         struct sockaddr_in client = {0};
@@ -227,6 +163,11 @@ static void stream_server_task(void *arg)
             continue;
         }
 
+        /* Send-Timeout: ein langsam lesender/verwaister Client darf send()
+         * nie dauerhaft blockieren (haelt sonst den Kamera-Mutex fest). */
+        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
         char line[64];
         if (stream_read_line(fd, line, sizeof(line)) < 0) {
             close(fd);
@@ -236,14 +177,6 @@ static void stream_server_task(void *arg)
         if (strstr(line, "/capture") != NULL) {
             stream_capture_once(fd);
             close(fd);
-        } else if (strstr(line, "/stream") != NULL) {
-            ESP_LOGI(TAG, "Stream: Multipart-Client verbunden");
-            /* Eigenen Task pro Client -> mehrere Verbindungen parallel */
-            if (xTaskCreate(stream_client_task, "mjpeg", 4096,
-                            (void *)(intptr_t)fd, 5, NULL) != pdPASS) {
-                ESP_LOGE(TAG, "Stream: Client-Task-Erstellung fehlgeschlagen");
-                close(fd);
-            }
         } else {
             stream_send_all(fd, "HTTP/1.1 404 Not Found\r\n"
                                 "Content-Length: 0\r\nConnection: close\r\n\r\n");
