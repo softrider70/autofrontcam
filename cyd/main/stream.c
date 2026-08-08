@@ -230,15 +230,9 @@ static void stream_task(void *arg)
                                 out.width > 0 && out.height > 0) {
                                 /* Wenn Touch-Menue ODER Diagnose-Test aktiv sind:
                                  * Bild nicht zeichnen (sonst wuerde es Menue bzw.
-                                 * Geometrie-Test uebermalen), nur Overlay. */
+                                 * Geometrie-Test uebermalen). */
                                 if (!ui_menu_is_open() && !ui_diag_is_active()) {
                                     display_blit_decoded(decoded, out.width, out.height);
-                                }
-                                /* OSD/Menue nur alle 500ms neu zeichnen (fps/Status) -
-                                 * vermeidet Dauerflackern bei jedem Frame. */
-                                if ((xTaskGetTickCount() - last_overlay) >= pdMS_TO_TICKS(500)) {
-                                    ui_draw_overlay();
-                                    last_overlay = xTaskGetTickCount();
                                 }
                                 frame_count++;
                             }
@@ -260,6 +254,14 @@ static void stream_task(void *arg)
                 ui_draw_overlay();
                 last_overlay = xTaskGetTickCount();
             }
+        }
+
+        /* Overlay/Menue/OSD regelmaessig aktualisieren (ALLE 500ms, unabhaengig
+         * von Frames): verhindert, dass die UI einfriert, wenn der HTTP-Fetch
+         * haengt (z.B. iPhone am Cam-AP) oder das Touch-Menue offen ist. */
+        if ((xTaskGetTickCount() - last_overlay) >= pdMS_TO_TICKS(500)) {
+            ui_draw_overlay();
+            last_overlay = xTaskGetTickCount();
         }
 
         TickType_t now = xTaskGetTickCount();

@@ -31,6 +31,14 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     nvs_config_init();
 
+    /* Weniger Log-Spam von HTTP-Komponenten: Wenn die CAM zeitweise nicht
+     * erreichbar ist, wuerden sonst "Failed to open a new connection"-Fehler
+     * das Log und den Terminal-Puffer ueberfluten (und die Touch-Diagnose
+     * verstecken). Komplett unterdruecken (ESP_LOG_NONE). */
+    esp_log_level_set("HTTP_CLIENT", ESP_LOG_NONE);
+    esp_log_level_set("transport_base", ESP_LOG_NONE);
+    esp_log_level_set("esp-tls", ESP_LOG_NONE);
+
     ESP_ERROR_CHECK(display_init());
     display_backlight(true);
     /* Panel-Geometrie ist verifiziert (320x240 Landscape, MADCTL 0x40) - kein

@@ -109,11 +109,13 @@ bool touch_get_point(int *x, int *y)
     int pressure = (z1 > 0) ? ((int)z1 - (int)z2 + 4095) : 0;
     if (pressure < 0) pressure = 0;
 
-    /* Kein Druck: nichts loggen (Diag-Logs waren nur fuer die Erkennungs-
-     * Diagnose; Kalibrier-Rohwerte kommen ueber den KALIB-Zweig). */
-    if (pressure < 50) {
+    /* Druckschwelle hoch genug, damit RAUSCHEN des XPT2046 NICHT als Touch
+     * gewertet wird (Geister-Touches ohne Beruehrung - der Nutzer hat den
+     * Screen nicht beruehrt, es kamen trotzdem Koordinaten). Echter Druck mit
+     * Stift liegt bei ~2000, Rauschen bei 0-50. */
+    if (pressure < 300) {
         touch_read_channel(XPT_CMD_PWD);
-        return false;   /* kein Druck -> kein Touch */
+        return false;   /* kein (echter) Druck -> kein Touch */
     }
 
     uint16_t x_raw = touch_read_channel(XPT_CMD_X);
