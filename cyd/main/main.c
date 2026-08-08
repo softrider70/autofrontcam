@@ -38,11 +38,9 @@ void app_main(void)
     display_test_pattern();
     display_draw_text(24, 150, "autofrontcam CYD", 0xFFFF, 0x0000);
 
-    /* Touch ist AUS: GPIO 6 (SDA) ist auf dem ESP32-WROOM ein Flash-SPI-Pin
-     * und nicht als I2C nutzbar -> Touch-Init crasht (WDT-Reset). Muss auf
-     * den tatsaechlichen Touch des CYD geprueft werden (XPT2046-SPI oder
-     * FT6236 auf anderen Pins). */
-#if 0
+    /* Touch (XPT2046 auf SPI3): Test-Initialisierung. Falls nicht vorhanden,
+     * laeuft der CYD trotzdem weiter (SPI ist separat, kein Crash). */
+#if 1
     esp_err_t tret = touch_init();
     if (tret != ESP_OK) {
         ESP_LOGW(TAG, "Touch nicht erreichbar - fahre ohne Touch fort");

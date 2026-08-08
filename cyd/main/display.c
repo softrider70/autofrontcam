@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -26,6 +27,7 @@
 static const char *TAG = "display";
 
 static spi_device_handle_t s_spi = NULL;
+static SemaphoreHandle_t s_lcd_mutex = NULL;   /* schuetzt SPI-Zugriffe (UI- vs Stream-Task) */
 static int s_rotation = DISPLAY_ROTATION;
 
 /* RGB565 -> Big-Endian-Speicherformat fuer das Display */
@@ -37,12 +39,14 @@ static inline uint16_t be16(uint16_t c) { return (uint16_t)((c << 8) | (c >> 8))
 static void lcd_write(bool is_cmd, const void *data, size_t len)
 {
     if (len == 0) return;
+    if (s_lcd_mutex) xSemaphoreTake(s_lcd_mutex, portMAX_DELAY);
     gpio_set_level(TFT_DC, is_cmd ? 0 : 1);
     spi_transaction_t t = {
         .length = (int)(len * 8),
         .tx_buffer = data,
     };
     esp_err_t err = spi_device_transmit(s_spi, &t);
+    if (s_lcd_mutex) xSemaphoreGive(s_lcd_mutex);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI transmit (%s, %d B) fehlgeschlagen: %s",
                  is_cmd ? "cmd" : "data", (int)len, esp_err_to_name(err));
@@ -132,6 +136,10 @@ static void ili9341_init_panel(void)
 /* ------------------------------------------------------------------ */
 esp_err_t display_init(void)
 {
+    /* Mutex fuer die SPI-Zugriffe: UI-Task (Menue/OSD) und Stream-Task (Video)
+     * greifen parallel auf das Display zu -> ohne Mutex SPI-Assert. */
+    s_lcd_mutex = xSemaphoreCreateMutex();
+
     /* BL und DC als GPIO konfigurieren (CS uebernimmt der SPI-Treiber) */
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << TFT_BL) | (1ULL << TFT_DC),
@@ -461,15 +469,36 @@ void display_draw_rect(int x, int y, int w, int h, uint16_t color)
 
 void display_test_pattern(void)
 {
-    ESP_LOGI(TAG, "Selbsttest: Rot");
-    display_fill(0xF800);
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_LOGI(TAG, "Selbsttest: Gruen");
-    display_fill(0x07E0);
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_LOGI(TAG, "Selbsttest: Blau");
-    display_fill(0x001F);
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_LOGI(TAG, "Selbsttest: Schwarz");
+    /* PANEL-GEOMETRIE-TEST: zeigt, wie das Display wirklich adressiert ist.
+     * 4 farbige Quadranten + weisser Rahmen + Kreuz + Eckmarker mit Zahlen.
+     * Der Nutzer beschreibt, welche Quadranten/Marker sichtbar sind -> daraus
+     * wird die echte Panel-Orientierung bestimmt (240x320 vs 320x240,
+     * Spiegelung, gedreht). Loest das "1/4 fehlend"-Problem. */
+    ESP_LOGI(TAG, "Geometrie-Test (%dx%d)", TFT_WIDTH, TFT_HEIGHT);
     display_fill(0x0000);
+
+    /* Rahmen */
+    display_draw_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, 0xFFFF);
+
+    /* Quadranten (mit 1px Abstand zum Rahmen):
+     *  LO = Rot, RO = Gruen, LU = Blau, RU = Gelb */
+    int hw = TFT_WIDTH / 2, hh = TFT_HEIGHT / 2;
+    display_draw_filled_rect(1, 1, hw - 1, hh - 1, 0xF800);                    /* LO Rot */
+    display_draw_filled_rect(hw, 1, TFT_WIDTH - hw - 1, hh - 1, 0x07E0);       /* RO Gruen */
+    display_draw_filled_rect(1, hh, hw - 1, TFT_HEIGHT - hh - 1, 0x001F);      /* LU Blau */
+    display_draw_filled_rect(hw, hh, TFT_WIDTH - hw - 1, TFT_HEIGHT - hh - 1, 0xFFE0); /* RU Gelb */
+
+    /* Mittiges Kreuz */
+    display_draw_filled_rect(hw - 1, 0, 2, TFT_HEIGHT, 0xFFFF);
+    display_draw_filled_rect(0, hh - 1, TFT_WIDTH, 2, 0xFFFF);
+
+    /* Eckmarker (weisse 10x10-Quadrate mit Zahlen 1..4) */
+    display_draw_filled_rect(2, 2, 10, 10, 0xFFFF);
+    display_draw_text(4, 3, "1", 0x0000, 0xFFFF);
+    display_draw_filled_rect(TFT_WIDTH - 12, 2, 10, 10, 0xFFFF);
+    display_draw_text(TFT_WIDTH - 10, 3, "2", 0x0000, 0xFFFF);
+    display_draw_filled_rect(2, TFT_HEIGHT - 12, 10, 10, 0xFFFF);
+    display_draw_text(4, TFT_HEIGHT - 11, "3", 0x0000, 0xFFFF);
+    display_draw_filled_rect(TFT_WIDTH - 12, TFT_HEIGHT - 12, 10, 10, 0xFFFF);
+    display_draw_text(TFT_WIDTH - 10, TFT_HEIGHT - 11, "4", 0x0000, 0xFFFF);
 }

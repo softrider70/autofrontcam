@@ -1,9 +1,12 @@
 /*
- * ui.c - OSD + Touch-Buttons (Helligkeit/Rotation) + CAM-Steuerung
+ * ui.c - OSD + Touch-Menue (Helligkeit/Rotation/Kalibrierung/Diagnose)
  *
- * Die Buttons senden Bildparameter per HTTP-POST an die Config-API des
- * ESP32-CAM (/api/config, Form-Feld "bri"), damit Helligkeit auf dem
- * Kameramodul selbst wirkt (nicht nur am Display).
+ * Design: Das Kamerabild ist vollflaechig, oben nur eine schmale OSD-Leiste
+ * (Version/fps/Status). KEINE dauerhaften Buttons mehr - ein Tippen auf das
+ * Display oeffnet das Touch-Menue mit Buttons (BRI+/BRI-/ROT) und den
+ * Funktionen Kalibrieren (XPT2046-Rohwerte loggen) und Diagnose (Panel-
+ * Geometrie-Test fuer das "1/4 fehlend"-Problem). Die Buttons senden die
+ * Bildparameter per HTTP-POST an die Config-API des ESP32-CAM (/api/config).
  */
 
 #include <stdio.h>
@@ -24,14 +27,42 @@
 
 static char s_status[40] = "Starte...";
 static int s_brightness = 0;
+static bool s_menu_open = false;
+static bool s_diag_mode = false;   /* Panel-Geometrie-Test aktiv */
 
-/* Button-Flaechen (Display-Koordinaten, 240x320) - unten, unterhalb des
- * Videobereichs (Video endet bei TFT_HEIGHT - UI_BTN_H, d.h. hier y=282). */
-#define BTN_Y   (TFT_HEIGHT - UI_BTN_H)
-#define BTN_H   34
-#define BTN1_X0 4
-#define BTN2_X0 84
-#define BTN3_X0 164
+/* ------------------------------------------------------------------ */
+/* Touch-Menue-Layout (unterer Bildschirmbereich, 320x240)             */
+/* ------------------------------------------------------------------ */
+#define MENU_Y      (TFT_HEIGHT - 80)   /* 160 bei 240 hoch */
+#define MENU_BTN_H  30
+#define MENU_BTN_W  ((TFT_WIDTH - 16) / 3)   /* ~101 bei 320 breit */
+#define MENU_B1_X   4
+#define MENU_B2_X   (MENU_B1_X + MENU_BTN_W + 4)
+#define MENU_B3_X   (MENU_B2_X + MENU_BTN_W + 4)
+
+static void ui_draw_button(int x, int y, int w, int h, const char *label,
+                           uint16_t bg, uint16_t fg)
+{
+    display_draw_filled_rect(x, y, w, h, bg);
+    display_draw_rect(x, y, w, h, 0xFFFF);
+    int lw = (int)strlen(label) * 6;
+    int lx = x + (w - lw) / 2;
+    if (lx < x + 2) lx = x + 2;
+    display_draw_text(lx, y + (h - 7) / 2, label, fg, bg);
+}
+
+static void ui_draw_menu(void)
+{
+    display_draw_text(2, MENU_Y - 14, "Menue", 0xFFFF, 0x0000);
+    /* Reihe 0: BRI+ BRI- ROT */
+    ui_draw_button(MENU_B1_X, MENU_Y, MENU_BTN_W, MENU_BTN_H, "BRI+", 0x001F, 0xFFFF);
+    ui_draw_button(MENU_B2_X, MENU_Y, MENU_BTN_W, MENU_BTN_H, "BRI-", 0x001F, 0xFFFF);
+    ui_draw_button(MENU_B3_X, MENU_Y, MENU_BTN_W, MENU_BTN_H, "ROT", 0x07E0, 0x0000);
+    /* Reihe 1: KALIB DIAG ZU */
+    ui_draw_button(MENU_B1_X, MENU_Y + MENU_BTN_H + 4, MENU_BTN_W, MENU_BTN_H, "KALIB", 0x7BEF, 0x0000);
+    ui_draw_button(MENU_B2_X, MENU_Y + MENU_BTN_H + 4, MENU_BTN_W, MENU_BTN_H, "DIAG", 0x7BEF, 0x0000);
+    ui_draw_button(MENU_B3_X, MENU_Y + MENU_BTN_H + 4, MENU_BTN_W, MENU_BTN_H, "ZU", 0xF800, 0xFFFF);
+}
 
 void ui_set_status(const char *fmt, ...)
 {
@@ -41,31 +72,33 @@ void ui_set_status(const char *fmt, ...)
     va_end(args);
 }
 
-static void ui_draw_button(int x0, int w, const char *label, uint16_t bg, uint16_t fg)
-{
-    display_draw_filled_rect(x0, BTN_Y, w, BTN_H, bg);
-    display_draw_rect(x0, BTN_Y, w, BTN_H, 0xFFFF);
-    int lw = (int)strlen(label) * 6;
-    int lx = x0 + (w - lw) / 2;
-    if (lx < x0 + 2) lx = x0 + 2;
-    display_draw_text(lx, BTN_Y + 12, label, fg, bg);
-}
-
 void ui_draw_overlay(void)
 {
     char line[40];
 
-    /* OSD oben: Version links, fps rechts, Status darunter */
+    /* Diagnose-Test aktiv: nichts ueber den Geometrie-Test zeichnen */
+    if (s_diag_mode) return;
+
+    /* OSD oben: Version links, fps rechts, Status darunter (KEINE Buttons) */
     snprintf(line, sizeof(line), "v0.1.%d", BUILD_NUMBER);
     display_draw_text(2, 2, line, 0xFFFF, 0x0000);
     snprintf(line, sizeof(line), "%lu fps", (unsigned long)stream_get_fps());
-    display_draw_text(180, 2, line, 0xFFFF, 0x0000);
+    display_draw_text(TFT_WIDTH - 70, 2, line, 0xFFFF, 0x0000);
     display_draw_text(2, 12, s_status, 0xFFFF, 0x0000);
 
-    /* Buttons unten */
-    ui_draw_button(BTN1_X0, 80, "BRI+", 0x001F, 0xFFFF);
-    ui_draw_button(BTN2_X0, 80, "BRI-", 0x001F, 0xFFFF);
-    ui_draw_button(BTN3_X0, 72, "ROT", 0x07E0, 0x0000);
+    if (s_menu_open) {
+        ui_draw_menu();
+    }
+}
+
+bool ui_menu_is_open(void)
+{
+    return s_menu_open;
+}
+
+bool ui_diag_is_active(void)
+{
+    return s_diag_mode;
 }
 
 /* ------------------------------------------------------------------ */
@@ -109,6 +142,50 @@ static void ui_toggle_rotation(void)
     ui_set_status("Drehung %s", (r == 1) ? "CW" : "CCW");
 }
 
+/* Kalibrier-Modus: Rohwerte werden geloggt (KALIB: x_raw=... y_raw=...).
+ * Nutzer drueckt auf die 4 Ecken -> Werte ablesen -> Matrix in touch.c setzen. */
+static void ui_start_calib(void)
+{
+    touch_set_calib_mode(true);
+    ui_set_status("KALIB: Ecken druecken");
+}
+
+/* Diagnose: Panel-Geometrie-Test (4 Quadranten + Marker) fuer das
+ * "1/4 fehlend"-Problem. Test bleibt stehen, bis ein Touch ihn beendet. */
+static void ui_show_diag(void)
+{
+    s_diag_mode = true;
+    s_menu_open = false;
+    touch_set_calib_mode(false);
+    display_test_pattern();
+    ui_set_status("Diagnose-Test (Tippen=weiter)");
+}
+
+static void ui_close_menu(void)
+{
+    s_menu_open = false;
+    touch_set_calib_mode(false);
+    ui_set_status("Starte...");
+}
+
+/* Menue-Tipp auswerten */
+static void ui_handle_menu_tap(int x, int y)
+{
+    if (y < MENU_Y || y > MENU_Y + 2 * MENU_BTN_H + 4) return;
+    int row = (y < MENU_Y + MENU_BTN_H) ? 0 : 1;
+    int col = (x < MENU_B2_X) ? 0 : (x < MENU_B3_X) ? 1 : 2;
+
+    if (row == 0) {
+        if (col == 0)       ui_send_brightness(1);
+        else if (col == 1)  ui_send_brightness(-1);
+        else                ui_toggle_rotation();
+    } else {
+        if (col == 0)       ui_start_calib();
+        else if (col == 1)  ui_show_diag();
+        else                ui_close_menu();
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* UI-Task                                                             */
 /* ------------------------------------------------------------------ */
@@ -116,6 +193,7 @@ static void ui_task(void *arg)
 {
     int px = -1, py = -1;
     TickType_t last_tap = 0;
+    bool was_pressed = false;
 
     while (1) {
         int x, y;
@@ -124,14 +202,25 @@ static void ui_task(void *arg)
             if ((abs(x - px) > 40 || abs(y - py) > 40) &&
                 (xTaskGetTickCount() - last_tap) > pdMS_TO_TICKS(300)) {
                 last_tap = xTaskGetTickCount();
-                if (y >= BTN_Y && y <= BTN_Y + BTN_H) {
-                    if (x < BTN2_X0)       ui_send_brightness(1);
-                    else if (x < BTN3_X0)  ui_send_brightness(-1);
-                    else                   ui_toggle_rotation();
+                if (s_diag_mode) {
+                    /* Diagnose-Test beenden -> Menue oeffnen */
+                    s_diag_mode = false;
+                    s_menu_open = true;
+                    ui_set_status("Menue");
+                    ui_draw_overlay();
+                } else if (s_menu_open) {
+                    ui_handle_menu_tap(x, y);
+                } else {
+                    /* Tippen auf das Video oeffnet das Menue */
+                    s_menu_open = true;
+                    ui_set_status("Menue");
+                    ui_draw_overlay();   /* Menue sofort zeichnen */
                 }
             }
+            was_pressed = true;
             px = x; py = y;
         } else {
+            was_pressed = false;
             px = -1; py = -1;
         }
         vTaskDelay(pdMS_TO_TICKS(50));

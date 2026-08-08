@@ -38,19 +38,26 @@ extern "C" {
 #define TFT_BL              21      /* Backlight (active HIGH) */
 #define TFT_BL_ON           1
 
-#define TFT_WIDTH           240
-#define TFT_HEIGHT          320
+#define TFT_WIDTH           320
+#define TFT_HEIGHT          240
 
-/* MADCTL 0x40 (MX=1, RGB) - korrigierte Farben/Ausrichtung laut Referenz */
-#define ILI9341_MADCTL      0x40
+/* MADCTL fuer 320x240 LANDSCAPE (Row/Col tauschen = MV=1 + MX=1).
+ * Vorher 0x40 (Portrait 240x320) fuellte nur 3/4 des Panels -> rechts 1/4
+ * uninitialisiertes GRAM ("Speicherbits"). */
+#define ILI9341_MADCTL      0x60
 
 /* =====================================================================
- * Touch FT6236 kapazitiv (I2C) - CYD (nicht XPT2046!)
+ * Touch XPT2046 resistiv (SPI, separater Bus SPI3) - CYD
+ * Belegung aus dem Referenzprojekt cyd-display-car1/src/touch_test.c:
+ * MOSI=32, MISO=39, CLK=25, CS=33, IRQ=36 (GPIO 6 als SDA ist auf dem
+ * ESP32-WROOM ein Flash-SPI-Pin und NICHT als I2C nutzbar!).
  * ===================================================================== */
-#define TOUCH_I2C_PORT      I2C_NUM_0
-#define TOUCH_SDA           6
-#define TOUCH_SCL           5
-#define TOUCH_ADDR          0x38
+#define TOUCH_SPI_HOST      SPI3_HOST
+#define TOUCH_SCLK          25
+#define TOUCH_MOSI          32
+#define TOUCH_MISO          39
+#define TOUCH_CS            33
+#define TOUCH_IRQ           36
 
 /* =====================================================================
  * WiFi (Station) - verbindet sich mit dem ESP32-CAM SoftAP
@@ -90,15 +97,16 @@ extern "C" {
 #define MAX_DECODED_BUF     60000       /* Obergrenze fuer Dekodier-Puffer */
 #define JPEG_BUF_SIZE       40960       /* Puffer fuer ein JPEG (SVGA q16 ~32KB) */
 
-/* Anzeige-Drehung (fuer die 90°-Auffuellung des Porträt-Displays):
- * 1 = im Uhrzeigersinn, 2 = gegen den Uhrzeigersinn */
-#define DISPLAY_ROTATION    1
+/* Anzeige-Drehung: 0 = keine (Kamerabild ist quer, Display ist quer 320x240).
+ * 1 = im Uhrzeigersinn, 2 = gegen den Uhrzeigersinn (nur falls noetig). */
+#define DISPLAY_ROTATION    0
 
 /* =====================================================================
- * UI-Layout: OSD-Bereich oben, Button-Leiste unten. Der Videobereich
- * liegt dazwischen und wird vom Bild nicht uebermalt -> kein Flackern. */
+ * UI-Layout: Schmale OSD-Leiste oben, KEINE dauerhafte Button-Leiste unten.
+ * Das Touch-Menue wird nur temporaer (per Tippen) ueber das Video gelegt,
+ * dadurch bleibt das Video fast vollflaechig. */
 #define UI_OSD_H        20      /* Hoehe OSD oben (Version/fps/Status) */
-#define UI_BTN_H        38      /* Hoehe Button-Leiste unten */
+#define UI_BTN_H        0       /* kein fester Button-Bereich (Menue temporaer) */
 
 /* =====================================================================
  * FreeRTOS Task-Konfiguration

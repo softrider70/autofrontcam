@@ -173,8 +173,9 @@ static void stream_task(void *arg)
         ui_set_status("HTTP-Fehler");
         vTaskDelete(NULL);
     }
-    /* Verbindung offen halten (Keep-Alive): spart TCP-Handshake pro Frame -> mehr fps */
-    esp_http_client_set_header(client, "Connection", "keep-alive");
+    /* KEIN Keep-Alive: der CAM-httpd (esp_http_server) unterstuetzt kein
+     * Keep-Alive und resettet die Verbindung sonst ("Connection reset by peer",
+     * fps-Einbruch). Verbindung pro Frame neu aufbauen = zuverlaessig. */
 
     TickType_t last = xTaskGetTickCount();
     uint32_t frame_count = 0;
@@ -227,8 +228,13 @@ static void stream_task(void *arg)
                             esp_jpeg_image_output_t out;
                             if (esp_jpeg_decode(&jcfg, &out) == ESP_OK &&
                                 out.width > 0 && out.height > 0) {
-                                display_blit_decoded(decoded, out.width, out.height);
-                                /* OSD nur alle 500ms neu zeichnen (fps/Status) -
+                                /* Wenn Touch-Menue ODER Diagnose-Test aktiv sind:
+                                 * Bild nicht zeichnen (sonst wuerde es Menue bzw.
+                                 * Geometrie-Test uebermalen), nur Overlay. */
+                                if (!ui_menu_is_open() && !ui_diag_is_active()) {
+                                    display_blit_decoded(decoded, out.width, out.height);
+                                }
+                                /* OSD/Menue nur alle 500ms neu zeichnen (fps/Status) -
                                  * vermeidet Dauerflackern bei jedem Frame. */
                                 if ((xTaskGetTickCount() - last_overlay) >= pdMS_TO_TICKS(500)) {
                                     ui_draw_overlay();
