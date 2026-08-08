@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_check.h"
+#include "esp_system.h"
 #include "config.h"
 #include "display.h"
 
@@ -44,7 +45,9 @@ static void lcd_cmd_data(uint8_t cmd, const uint8_t *data, size_t len)
     esp_lcd_panel_io_tx_param(s_io, cmd, data, len);
 }
 
-/* Adressfenster setzen + RAMWR aktivieren */
+/* Adressfenster setzen (CASET/PASET). Die Pixeldaten werden danach mit
+ * lcd_draw_bitmap() geschrieben (RAMWR zusammen mit den Daten - gleiches Muster
+ * wie der getestete ESP-IDF ST7789-Treiber). */
 static void lcd_set_window(int x0, int y0, int x1, int y1)
 {
     uint8_t d[4];
@@ -54,7 +57,23 @@ static void lcd_set_window(int x0, int y0, int x1, int y1)
     d[0] = (uint8_t)(y0 >> 8); d[1] = (uint8_t)y0;
     d[2] = (uint8_t)(y1 >> 8); d[3] = (uint8_t)y1;
     esp_lcd_panel_io_tx_param(s_io, 0x2B, d, 4);   /* PASET */
-    esp_lcd_panel_io_tx_param(s_io, 0x2C, NULL, 0); /* RAMWR */
+}
+
+/* Pixeldaten schreiben: RAMWR (0x2C) zusammen mit den Daten in einem CS-Zug */
+static void lcd_draw_bitmap(const void *data, size_t len)
+{
+    esp_err_t err = esp_lcd_panel_io_tx_color(s_io, 0x2C, data, len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "tx_color fehlgeschlagen (%d B): %s", (int)len, esp_err_to_name(err));
+    }
+}
+
+/* Wartet auf alle ausstehenden Farb-Transfers (NOP-Kommando via tx_param,
+ * das intern auf inflight-Transaktionen wartet) - ERST DANN darf der
+ * DMA-Puffer freigegeben werden! */
+static void lcd_flush(void)
+{
+    esp_lcd_panel_io_tx_param(s_io, 0x00, NULL, 0);
 }
 
 static void ili9341_init_panel(void)
@@ -125,8 +144,9 @@ esp_err_t display_init(void)
                         TAG, "Panel-IO init fehlgeschlagen");
 
     ili9341_init_panel();
+    ESP_LOGI(TAG, "ILI9341/ST7789 initialisiert (%dx%d), freier Heap: %lu B",
+             TFT_WIDTH, TFT_HEIGHT, (unsigned long)esp_get_free_heap_size());
     display_fill(0x0000);
-    ESP_LOGI(TAG, "ILI9341 initialisiert (%dx%d)", TFT_WIDTH, TFT_HEIGHT);
     return ESP_OK;
 }
 
@@ -139,14 +159,19 @@ void display_fill(uint16_t color)
 {
     if (!s_io) return;
     uint16_t *row = heap_caps_malloc(TFT_WIDTH * 2, MALLOC_CAP_DMA);
-    if (!row) return;
+    if (!row) {
+        ESP_LOGE(TAG, "display_fill: kein DMA-Puffer (Heap %lu)",
+                 (unsigned long)esp_get_free_heap_size());
+        return;
+    }
     uint16_t c = be16(color);
     for (int x = 0; x < TFT_WIDTH; x++) row[x] = c;
 
     lcd_set_window(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
     for (int y = 0; y < TFT_HEIGHT; y++) {
-        esp_lcd_panel_io_tx_color(s_io, -1, row, TFT_WIDTH * 2);
+        lcd_draw_bitmap(row, TFT_WIDTH * 2);
     }
+    lcd_flush();
     heap_caps_free(row);
 }
 
@@ -161,7 +186,10 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
     if (rw <= 0 || rh <= 0) return;
 
     uint16_t *row = heap_caps_malloc(TFT_WIDTH * 2, MALLOC_CAP_DMA);
-    if (!row) return;
+    if (!row) {
+        ESP_LOGE(TAG, "display_blit_decoded: kein DMA-Puffer");
+        return;
+    }
 
     for (int dy = 0; dy < TFT_HEIGHT; dy++) {
         int ry = (dy * rh) / TFT_HEIGHT;
@@ -185,8 +213,9 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
             row[dx] = src[sy * src_w + sx];
         }
         lcd_set_window(0, dy, TFT_WIDTH - 1, dy);
-        esp_lcd_panel_io_tx_color(s_io, -1, row, TFT_WIDTH * 2);
+        lcd_draw_bitmap(row, TFT_WIDTH * 2);
     }
+    lcd_flush();
     heap_caps_free(row);
 }
 
@@ -312,7 +341,10 @@ void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t 
     if (total_w <= 0) return;
 
     uint16_t *row = heap_caps_malloc((size_t)total_w * 2, MALLOC_CAP_DMA);
-    if (!row) return;
+    if (!row) {
+        ESP_LOGE(TAG, "display_draw_text: kein DMA-Puffer");
+        return;
+    }
 
     uint16_t col_be = be16(color);
     uint16_t bg_be  = be16(bg);
@@ -336,8 +368,9 @@ void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t 
         if (xx0 + ww > TFT_WIDTH) ww = TFT_WIDTH - xx0;
         if (ww <= 0) continue;
         lcd_set_window(xx0, yy, xx0 + ww - 1, yy);
-        esp_lcd_panel_io_tx_color(s_io, -1, row + (xx0 - x), (size_t)ww * 2);
+        lcd_draw_bitmap(row + (xx0 - x), (size_t)ww * 2);
     }
+    lcd_flush();
     heap_caps_free(row);
 }
 
@@ -352,14 +385,18 @@ void display_draw_filled_rect(int x, int y, int w, int h, uint16_t color)
     if (w <= 0 || h <= 0) return;
 
     uint16_t *row = heap_caps_malloc((size_t)w * 2, MALLOC_CAP_DMA);
-    if (!row) return;
+    if (!row) {
+        ESP_LOGE(TAG, "display_draw_filled_rect: kein DMA-Puffer");
+        return;
+    }
     uint16_t c = be16(color);
     for (int i = 0; i < w; i++) row[i] = c;
 
     for (int ry = 0; ry < h; ry++) {
         lcd_set_window(x, y + ry, x + w - 1, y + ry);
-        esp_lcd_panel_io_tx_color(s_io, -1, row, (size_t)w * 2);
+        lcd_draw_bitmap(row, (size_t)w * 2);
     }
+    lcd_flush();
     heap_caps_free(row);
 }
 

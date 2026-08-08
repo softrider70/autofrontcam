@@ -187,32 +187,37 @@ static void stream_task(void *arg)
                     .indata = jpeg_buf,
                     .indata_size = (uint32_t)buf.len,
                     .out_format = JPEG_IMAGE_FORMAT_RGB565,
-                    .out_scale = JPEG_DECODE_SCALE,
+                    .out_scale = JPEG_DECODE_SCALE,   /* nur fuer get_image_info (volle Dims) */
                     .flags = { .swap_color_bytes = 1 },
                 };
                 esp_jpeg_image_output_t info;
                 if (esp_jpeg_get_image_info(&jcfg, &info) == ESP_OK &&
                     info.width > 0 && info.height > 0) {
+                    /* Dekodier-Skalierung waehlen: QVGA (<=320x240) -> 1:2 fuer schaerferes
+                     * Bild, groesser -> 1:4 (RAM-schonend, kein PSRAM). */
+                    int div = (info.width <= 320 && info.height <= 240) ? 2 : 4;
+                    size_t need = (size_t)(info.width / div) * (info.height / div) * 2;
                     /* Diagnose: nur bei Groessenwechsel loggen */
                     if (info.width != last_log_w || info.height != last_log_h) {
-                        ESP_LOGI(TAG, "JPEG %d B -> %dx%d, Puffer %d B", buf.len,
-                                 info.width, info.height, info.output_len);
+                        ESP_LOGI(TAG, "JPEG %d B -> %dx%d (Skalierung 1:%d, Puffer %d B)", buf.len,
+                                 info.width, info.height, div, (int)need);
                         last_log_w = info.width;
                         last_log_h = info.height;
                     }
-                    if (info.output_len > MAX_DECODED_BUF) {
+                    if (need > MAX_DECODED_BUF) {
                         ESP_LOGW(TAG, "Bild %dx%d zu gross (%d B > %d) - Frame uebersprungen",
-                                 info.width, info.height, info.output_len, MAX_DECODED_BUF);
+                                 info.width, info.height, (int)need, MAX_DECODED_BUF);
                     } else {
-                        if (!decoded || info.output_len > decoded_cap) {
+                        if (!decoded || need > decoded_cap) {
                             heap_caps_free(decoded);
-                            decoded = heap_caps_malloc(info.output_len, MALLOC_CAP_8BIT);
-                            decoded_cap = decoded ? info.output_len : 0;
+                            decoded = heap_caps_malloc(need, MALLOC_CAP_8BIT);
+                            decoded_cap = decoded ? need : 0;
                             if (!decoded) {
-                                ESP_LOGW(TAG, "Kein RAM fuer %d B Dekodier-Puffer", info.output_len);
+                                ESP_LOGW(TAG, "Kein RAM fuer %d B Dekodier-Puffer", (int)need);
                             }
                         }
                         if (decoded) {
+                            jcfg.out_scale = (div == 2) ? JPEG_IMAGE_SCALE_1_2 : JPEG_IMAGE_SCALE_1_4;
                             jcfg.outbuf = (uint8_t *)decoded;
                             jcfg.outbuf_size = decoded_cap;
                             esp_jpeg_image_output_t out;
