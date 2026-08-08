@@ -39,10 +39,13 @@ void app_main(void)
     display_draw_text(24, 150, "autofrontcam CYD", 0xFFFF, 0x0000);
 
     /* Touch ist optional: Wenn der FT6236 nicht antwortet, trotzdem weiterstarten */
+    /* ISOLATIONSTEST: touch_init aus (I2C ist Kandidat fuer den Panic nach dem Selbsttest) */
+#if 0
     esp_err_t tret = touch_init();
     if (tret != ESP_OK) {
         ESP_LOGW(TAG, "Touch nicht erreichbar - fahre ohne Touch fort");
     }
+#endif
 
     stream_start();
     ui_start();

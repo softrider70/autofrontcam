@@ -16,7 +16,6 @@
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
-#include "esp_lcd_panel_io.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_check.h"
@@ -26,52 +25,64 @@
 
 static const char *TAG = "display";
 
-static esp_lcd_panel_io_handle_t s_io = NULL;
+static spi_device_handle_t s_spi = NULL;
 static int s_rotation = DISPLAY_ROTATION;
 
 /* RGB565 -> Big-Endian-Speicherformat fuer das Display */
 static inline uint16_t be16(uint16_t c) { return (uint16_t)((c << 8) | (c >> 8)); }
 
 /* ------------------------------------------------------------------ */
-/* ILI9341-Kommandos                                                  */
+/* ILI9341-Kommandos (roher SPI-Treiber wie im Referenzprojekt)       */
 /* ------------------------------------------------------------------ */
+static void lcd_write(bool is_cmd, const void *data, size_t len)
+{
+    if (len == 0) return;
+    gpio_set_level(TFT_DC, is_cmd ? 0 : 1);
+    spi_transaction_t t = {
+        .length = (int)(len * 8),
+        .tx_buffer = data,
+    };
+    esp_err_t err = spi_device_transmit(s_spi, &t);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SPI transmit (%s, %d B) fehlgeschlagen: %s",
+                 is_cmd ? "cmd" : "data", (int)len, esp_err_to_name(err));
+    }
+}
+
 static void lcd_cmd(uint8_t cmd)
 {
-    esp_lcd_panel_io_tx_param(s_io, cmd, NULL, 0);
+    lcd_write(true, &cmd, 1);
 }
 
 static void lcd_cmd_data(uint8_t cmd, const uint8_t *data, size_t len)
 {
-    esp_lcd_panel_io_tx_param(s_io, cmd, data, len);
+    lcd_write(true, &cmd, 1);
+    if (len) lcd_write(false, data, len);
 }
 
-/* Adressfenster setzen (CASET/PASET) */
+/* Adressfenster setzen (CASET/PASET/RAMWR) */
 static void lcd_set_window(int x0, int y0, int x1, int y1)
 {
     uint8_t d[4];
     d[0] = (uint8_t)(x0 >> 8); d[1] = (uint8_t)x0;
     d[2] = (uint8_t)(x1 >> 8); d[3] = (uint8_t)x1;
-    esp_lcd_panel_io_tx_param(s_io, 0x2A, d, 4);   /* CASET */
+    lcd_cmd(0x2A);                 /* CASET */
+    lcd_write(false, d, 4);
     d[0] = (uint8_t)(y0 >> 8); d[1] = (uint8_t)y0;
     d[2] = (uint8_t)(y1 >> 8); d[3] = (uint8_t)y1;
-    esp_lcd_panel_io_tx_param(s_io, 0x2B, d, 4);   /* PASET */
+    lcd_cmd(0x2B);                 /* PASET */
+    lcd_write(false, d, 4);
+    lcd_cmd(0x2C);                 /* RAMWR */
 }
 
-/* Pixeldaten schreiben: RAMWR (0x2C) zusammen mit den Daten */
+/* Pixeldaten schreiben (DC=1) */
 static void lcd_draw_bitmap(const void *data, size_t len)
 {
-    esp_err_t err = esp_lcd_panel_io_tx_color(s_io, 0x2C, data, len);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "tx_color fehlgeschlagen (%d B): %s", (int)len, esp_err_to_name(err));
-    }
+    lcd_write(false, data, len);
 }
 
-/* Wartet auf alle ausstehenden Farb-Transfers (NOP via tx_param, das intern
- * auf inflight-Transaktionen wartet) - ERST DANN den DMA-Puffer freigeben! */
-static void lcd_flush(void)
-{
-    esp_lcd_panel_io_tx_param(s_io, 0x00, NULL, 0);
-}
+/* Synchrones SPI: keine ausstehenden Transfers -> kein Flush noetig */
+static void lcd_flush(void) { }
 
 static void ili9341_init_panel(void)
 {
@@ -121,9 +132,9 @@ static void ili9341_init_panel(void)
 /* ------------------------------------------------------------------ */
 esp_err_t display_init(void)
 {
-    /* Nur BL wird hier als GPIO konfiguriert; CS/DC uebernimmt der Panel-IO-Treiber */
+    /* BL und DC als GPIO konfigurieren (CS uebernimmt der SPI-Treiber) */
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << TFT_BL),
+        .pin_bit_mask = (1ULL << TFT_BL) | (1ULL << TFT_DC),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -131,28 +142,26 @@ esp_err_t display_init(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "GPIO-Konfiguration fehlgeschlagen");
     gpio_set_level(TFT_BL, !TFT_BL_ON);
+    gpio_set_level(TFT_DC, 1);
 
+    /* SPI-Bus (roher SPI-Treiber wie im verifizierten Referenzprojekt) */
     spi_bus_config_t buscfg = {
         .sclk_io_num = TFT_SCK,
         .mosi_io_num = TFT_MOSI,
         .miso_io_num = TFT_MISO,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = TFT_WIDTH * 2 + 8,
+        .max_transfer_sz = TFT_WIDTH * 2 * 4 + 8,
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(TFT_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "SPI-Bus init fehlgeschlagen");
 
-    esp_lcd_panel_io_spi_config_t io_cfg = {
-        .cs_gpio_num = TFT_CS,
-        .dc_gpio_num = TFT_DC,
-        .spi_mode = 0,
-        .pclk_hz = 40 * 1000 * 1000,   /* 40 MHz (wie im Referenzprojekt) */
-        .trans_queue_depth = 10,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
+    spi_device_interface_config_t dev_cfg = {
+        .clock_speed_hz = 40 * 1000 * 1000,   /* 40 MHz (wie im Referenzprojekt) */
+        .mode = 0,
+        .spics_io_num = TFT_CS,
+        .queue_size = 7,
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)TFT_SPI_HOST, &io_cfg, &s_io),
-                        TAG, "Panel-IO init fehlgeschlagen");
+    ESP_RETURN_ON_ERROR(spi_bus_add_device(TFT_SPI_HOST, &dev_cfg, &s_spi), TAG, "SPI-Geraet fehlgeschlagen");
 
     ili9341_init_panel();
     ESP_LOGI(TAG, "ILI9341 initialisiert (%dx%d), freier Heap: %lu B",
@@ -168,7 +177,7 @@ void display_backlight(bool on)
 
 void display_fill(uint16_t color)
 {
-    if (!s_io) return;
+    if (!s_spi) return;
     uint16_t *row = heap_caps_malloc(TFT_WIDTH * 2, MALLOC_CAP_DMA);
     if (!row) {
         ESP_LOGE(TAG, "display_fill: kein DMA-Puffer (Heap %lu)",
@@ -188,7 +197,7 @@ void display_fill(uint16_t color)
 
 void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
 {
-    if (!s_io || !src) return;
+    if (!s_spi || !src) return;
     if (src_w <= 0 || src_h <= 0) return;
 
     /* Dimensionen des rotierten Bildes */
@@ -345,7 +354,7 @@ static const uint8_t font5x7[96][5] = {
 
 void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t bg)
 {
-    if (!s_io || !text) return;
+    if (!s_spi || !text) return;
 
     int len = (int)strlen(text);
     int total_w = len * 6;   /* 5px Glyphe + 1px Abstand */
@@ -387,7 +396,7 @@ void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t 
 
 void display_draw_filled_rect(int x, int y, int w, int h, uint16_t color)
 {
-    if (!s_io) return;
+    if (!s_spi) return;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (w <= 0 || h <= 0) return;

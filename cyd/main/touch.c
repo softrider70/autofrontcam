@@ -18,6 +18,8 @@ static const char *TAG = "touch";
 
 #define FT6236_REG_TD_STATUS  0x02   /* Anzahl aktiver Touches + Touch 1 Daten */
 
+static bool s_touch_ok = false;   /* erst true, wenn I2C + FT6236 erfolgreich initialisiert */
+
 static esp_err_t ft6236_read_reg(uint8_t reg, uint8_t *data, size_t len)
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -55,13 +57,16 @@ esp_err_t touch_init(void)
         ESP_LOGE(TAG, "FT6236 antwortet nicht auf I2C - Touch deaktiviert");
         return ret;
     }
+    s_touch_ok = true;
     ESP_LOGI(TAG, "FT6236 Touch initialisiert");
     return ESP_OK;
 }
 
 bool touch_get_point(int *x, int *y)
 {
-    if (!x || !y) return false;
+    if (!s_touch_ok || !x || !y) {
+        return false;   /* Touch nicht initialisiert -> kein Touch */
+    }
 
     uint8_t data[6];
     if (ft6236_read_reg(FT6236_REG_TD_STATUS, data, 6) != ESP_OK) {
