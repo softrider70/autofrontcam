@@ -33,10 +33,13 @@ void app_main(void)
 
     ESP_ERROR_CHECK(display_init());
     display_backlight(true);
-    /* Diagnose-Selbsttest: Rot -> Gruen -> Blau -> Schwarz
-     * (zeigt, ob Pixeldaten ankommen und ob Farben invertiert sind) */
+    /* Panel-Geometrie ist verifiziert (320x240 Landscape, MADCTL 0x40) - kein
+     * Selbsttest beim Boot noetig. Der Geometrie-Test bleibt im Menue (DIAG)
+     * erreichbar, um die Orientierung jederzeit zu pruefen. */
+#if 0
     display_test_pattern();
     display_draw_text(24, 150, "autofrontcam CYD", 0xFFFF, 0x0000);
+#endif
 
     /* Touch (XPT2046 auf SPI3): Test-Initialisierung. Falls nicht vorhanden,
      * laeuft der CYD trotzdem weiter (SPI ist separat, kein Crash). */

@@ -41,10 +41,11 @@ extern "C" {
 #define TFT_WIDTH           320
 #define TFT_HEIGHT          240
 
-/* MADCTL fuer 320x240 LANDSCAPE (Row/Col tauschen = MV=1 + MX=1).
- * Vorher 0x40 (Portrait 240x320) fuellte nur 3/4 des Panels -> rechts 1/4
- * uninitialisiertes GRAM ("Speicherbits"). */
-#define ILI9341_MADCTL      0x60
+/* MADCTL 0x40 (MX=1, KEIN MV!): Das Panel ist ein 320x240-NATIV-Controller
+ * (ST7796-artig), NICHT 240x320. Mit MV (0x60) wird das Bild gekippt/gesplittet
+ * (untere Haelfte oben). 0x40 zeigt die Schrift aufrecht; TFT_WIDTH=320 fuellt
+ * dann das ganze Panel (kein 1/4-Speicherbits mehr). */
+#define ILI9341_MADCTL      0x40
 
 /* =====================================================================
  * Touch XPT2046 resistiv (SPI, separater Bus SPI3) - CYD
