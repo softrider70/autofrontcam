@@ -57,6 +57,18 @@ extern "C" {
 #define WIFI_CONNECT_TIMEOUT_S 15
 
 /* =====================================================================
+ * Statische IP fuer den CYD (feste Adresse am Cam-AP, kein DHCP)
+ * Sender (CAM) ist immer 10.1.1.1, Empfaenger (CYD) immer 10.1.1.2.
+ * ===================================================================== */
+#define CYD_STATIC_IP       "10.1.1.2"
+#define CYD_GATEWAY         "10.1.1.1"
+#define CYD_NETMASK         "255.255.255.0"
+
+/* Farbinversion (1 = INVON 0x21 senden) - fuer manche CYD-Panels noetig
+ * (ST7789-Variante zeigt sonst invertierte Farben = schwarz als weiss). */
+#define CYD_INVERT_COLOR    0
+
+/* =====================================================================
  * Kamera-Stream (HTTP GET /capture auf dem ESP32-CAM)
  * ===================================================================== */
 #define CAM_HOST_DEFAULT    "10.1.1.1"  /* SoftAP-IP des ESP32-CAM */
@@ -67,13 +79,13 @@ extern "C" {
 #define STREAM_POLL_MS      120         /* ~8 fps Polling */
 #define STREAM_FETCH_TIMEOUT_MS 2000
 
-/* JPEG-Dekodierung: VGA 640x480 -> Skalierung 1:4 -> 160x120 (38 KB, kein PSRAM)
- * Hinweis: DECODED_W/H muessen zur Kameraeinstellung des esp32cam passen
- * (CAM_FRAME_SIZE = FRAMESIZE_VGA). */
+/* JPEG-Dekodierung: wird adaptiv an die tatsaechliche Kameragroesse angepasst
+ * (kein PSRAM). Maximaler Dekodier-Puffer: SVGA 800x600 bei 1:4 = 200x150x2 = 60000 B. */
 #define JPEG_DECODE_SCALE   JPEG_IMAGE_SCALE_1_4
 #define DECODED_W           160
 #define DECODED_H           120
-#define JPEG_BUF_SIZE       32768       /* Puffer fuer ein JPEG (VGA q16 ~7KB) */
+#define MAX_DECODED_BUF     60000       /* Obergrenze fuer Dekodier-Puffer */
+#define JPEG_BUF_SIZE       40960       /* Puffer fuer ein JPEG (SVGA q16 ~32KB) */
 
 /* Anzeige-Drehung (fuer die 90°-Auffuellung des Porträt-Displays):
  * 1 = im Uhrzeigersinn, 2 = gegen den Uhrzeigersinn */

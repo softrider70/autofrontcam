@@ -28,3 +28,6 @@ void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t 
 /* Rechtecke zeichnen (RGB565) */
 void display_draw_rect(int x, int y, int w, int h, uint16_t color);
 void display_draw_filled_rect(int x, int y, int w, int h, uint16_t color);
+
+/* Diagnose-Selbsttest: Rot -> Gruen -> Blau -> Schwarz nacheinander (je ~0,8s) */
+void display_test_pattern(void);

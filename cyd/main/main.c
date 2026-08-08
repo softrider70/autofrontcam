@@ -33,7 +33,9 @@ void app_main(void)
 
     ESP_ERROR_CHECK(display_init());
     display_backlight(true);
-    display_fill(0x0000);
+    /* Diagnose-Selbsttest: Rot -> Gruen -> Blau -> Schwarz
+     * (zeigt, ob Pixeldaten ankommen und ob Farben invertiert sind) */
+    display_test_pattern();
     display_draw_text(24, 150, "autofrontcam CYD", 0xFFFF, 0x0000);
 
     ESP_ERROR_CHECK(touch_init());

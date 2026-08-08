@@ -58,7 +58,16 @@ static void wifi_sta_init(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+
+    /* Feste IP (kein DHCP): Sender ist immer 10.1.1.1, Empfaenger immer 10.1.1.2 */
+    esp_netif_dhcpc_stop(sta_netif);
+    esp_netif_ip_info_t ip_info = {0};
+    ESP_ERROR_CHECK(esp_netif_str_to_ip4(CYD_STATIC_IP, &ip_info.ip));
+    ESP_ERROR_CHECK(esp_netif_str_to_ip4(CYD_GATEWAY, &ip_info.gw));
+    ESP_ERROR_CHECK(esp_netif_str_to_ip4(CYD_NETMASK, &ip_info.netmask));
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(sta_netif, &ip_info));
+    ESP_LOGI(TAG, "Statische IP gesetzt: %s (GW %s)", CYD_STATIC_IP, CYD_GATEWAY);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -134,13 +143,17 @@ static void stream_task(void *arg)
     if (h && strlen(h) > 0) { strncpy(host, h, sizeof(host) - 1); host[sizeof(host) - 1] = 0; }
     if (h) free(h);
 
-    uint16_t *decoded = heap_caps_malloc((size_t)DECODED_W * DECODED_H * 2, MALLOC_CAP_8BIT);
     uint8_t *jpeg_buf = heap_caps_malloc(JPEG_BUF_SIZE, MALLOC_CAP_8BIT);
-    if (!decoded || !jpeg_buf) {
-        ESP_LOGE(TAG, "Nicht genug RAM fuer Stream-Puffer");
+    if (!jpeg_buf) {
+        ESP_LOGE(TAG, "Nicht genug RAM fuer JPEG-Puffer");
         ui_set_status("RAM-Fehler");
         vTaskDelete(NULL);
     }
+    /* Dekodier-Puffer wird adaptiv anhand der tatsaechlichen JPEG-Groesse
+     * angelegt (klassischer CYD hat kein PSRAM). */
+    uint16_t *decoded = NULL;
+    size_t decoded_cap = 0;
+    static int last_log_w = 0, last_log_h = 0;
 
     char url[96];
     snprintf(url, sizeof(url), "http://%s:%d%s", host, CAM_PORT_DEFAULT, CAM_CAPTURE_PATH);
@@ -173,17 +186,44 @@ static void stream_task(void *arg)
                 esp_jpeg_image_cfg_t jcfg = {
                     .indata = jpeg_buf,
                     .indata_size = (uint32_t)buf.len,
-                    .outbuf = (uint8_t *)decoded,
-                    .outbuf_size = (size_t)DECODED_W * DECODED_H * 2,
                     .out_format = JPEG_IMAGE_FORMAT_RGB565,
                     .out_scale = JPEG_DECODE_SCALE,
                     .flags = { .swap_color_bytes = 1 },
                 };
-                esp_jpeg_image_output_t out;
-                if (esp_jpeg_decode(&jcfg, &out) == ESP_OK && out.width > 0 && out.height > 0) {
-                    display_blit_decoded(decoded, out.width, out.height);
-                    ui_draw_overlay();
-                    frame_count++;
+                esp_jpeg_image_output_t info;
+                if (esp_jpeg_get_image_info(&jcfg, &info) == ESP_OK &&
+                    info.width > 0 && info.height > 0) {
+                    /* Diagnose: nur bei Groessenwechsel loggen */
+                    if (info.width != last_log_w || info.height != last_log_h) {
+                        ESP_LOGI(TAG, "JPEG %d B -> %dx%d, Puffer %d B", buf.len,
+                                 info.width, info.height, info.output_len);
+                        last_log_w = info.width;
+                        last_log_h = info.height;
+                    }
+                    if (info.output_len > MAX_DECODED_BUF) {
+                        ESP_LOGW(TAG, "Bild %dx%d zu gross (%d B > %d) - Frame uebersprungen",
+                                 info.width, info.height, info.output_len, MAX_DECODED_BUF);
+                    } else {
+                        if (!decoded || info.output_len > decoded_cap) {
+                            heap_caps_free(decoded);
+                            decoded = heap_caps_malloc(info.output_len, MALLOC_CAP_8BIT);
+                            decoded_cap = decoded ? info.output_len : 0;
+                            if (!decoded) {
+                                ESP_LOGW(TAG, "Kein RAM fuer %d B Dekodier-Puffer", info.output_len);
+                            }
+                        }
+                        if (decoded) {
+                            jcfg.outbuf = (uint8_t *)decoded;
+                            jcfg.outbuf_size = decoded_cap;
+                            esp_jpeg_image_output_t out;
+                            if (esp_jpeg_decode(&jcfg, &out) == ESP_OK &&
+                                out.width > 0 && out.height > 0) {
+                                display_blit_decoded(decoded, out.width, out.height);
+                                ui_draw_overlay();
+                                frame_count++;
+                            }
+                        }
+                    }
                 }
             }
         }

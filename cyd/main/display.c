@@ -63,35 +63,24 @@ static void ili9341_init_panel(void)
     gpio_set_level(TFT_RST, 0);
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(TFT_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(120));
+    vTaskDelay(pdMS_TO_TICKS(150));
 
-    lcd_cmd(0x01);                 /* Software-Reset */
-    vTaskDelay(pdMS_TO_TICKS(120));
-    lcd_cmd(0x11);                 /* Sleep Out */
-    vTaskDelay(pdMS_TO_TICKS(120));
+    lcd_cmd(0x01);                 /* SWRESET */
+    vTaskDelay(pdMS_TO_TICKS(150));
+    lcd_cmd(0x11);                 /* SLPOUT */
+    vTaskDelay(pdMS_TO_TICKS(150));
 
-    /* Init-Sequenz: CMD, Anzahl Parameter, Parameter... */
-    static const uint8_t init_seq[] = {
-        0xC0, 2, 0x23, 0x23,                 /* Power Control 1 */
-        0xC1, 1, 0x23,                       /* Power Control 2 */
-        0xC5, 2, 0x3E, 0x28,                 /* VCOM Control 1 */
-        0xC7, 1, 0x86,                       /* VCOM Control 2 */
-        0x36, 1, 0x08,                       /* MADCTL: nur BGR (Drehung in Software) */
-        0x3A, 1, 0x55,                       /* Pixel Format 16bpp */
-        0xB1, 2, 0x00, 0x18,                 /* Frame Rate */
-        0xB6, 3, 0x08, 0x82, 0x27,           /* Display Function Control */
-        0xF2, 1, 0x00,                       /* 3Gamma Function Disable */
-        0x26, 1, 0x01,                       /* Gamma Set */
-        0xE0, 15, 0x0F,0x31,0x2B,0x0C,0x0E,0x08,0x4E,0xF1,0x37,0x07,0x10,0x03,0x0E,0x09,0x00,
-        0xE1, 15, 0x00,0x0E,0x14,0x03,0x11,0x07,0x31,0xC1,0x48,0x08,0x0F,0x0C,0x31,0x36,0x0F,
-    };
-    size_t i = 0;
-    while (i < sizeof(init_seq)) {
-        uint8_t cmd = init_seq[i++];
-        uint8_t cnt = init_seq[i++];
-        lcd_cmd_data(cmd, &init_seq[i], cnt);
-        i += cnt;
-    }
+    /* Universelle Init-Sequenz: funktioniert mit ILI9341 UND ST7789 (CYD-Varianten).
+     * Bewusst KEINE chipspezifischen Gamma-/Power-Register, damit keine Variante
+     * durcheinandergebracht wird. */
+    lcd_cmd_data(0x3A, (const uint8_t[]){ 0x55 }, 1);   /* Pixel Format 16bpp */
+    lcd_cmd_data(0x36, (const uint8_t[]){ 0x08 }, 1);   /* MADCTL: nur BGR (Drehung in Software) */
+
+#if CYD_INVERT_COLOR
+    lcd_cmd(0x21);                 /* INVON: invertierte Farben (ST7789-Variante) */
+#else
+    lcd_cmd(0x20);                 /* INVOFF: normale Farben */
+#endif
 
     lcd_cmd(0x29);                 /* Display ON */
 }
@@ -127,7 +116,7 @@ esp_err_t display_init(void)
         .cs_gpio_num = TFT_CS,
         .dc_gpio_num = TFT_DC,
         .spi_mode = 0,
-        .pclk_hz = 40 * 1000 * 1000,
+        .pclk_hz = 20 * 1000 * 1000,   /* 20 MHz: stabiler als 40 MHz auf CYD-Leiterbahnen */
         .trans_queue_depth = 10,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
@@ -164,16 +153,24 @@ void display_fill(uint16_t color)
 void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
 {
     if (!s_io || !src) return;
+    if (src_w <= 0 || src_h <= 0) return;
 
-    /* 2x-Upscaling + 90°-Rotation: 160x120 -> 240x320 fuellt das Display komplett.
-     * 2 Zeilen-Puffer (dy und dy+1 sind bei 2x identisch) -> 480 Byte DMA. */
-    uint16_t *row = heap_caps_malloc(TFT_WIDTH * 2 * 2, MALLOC_CAP_DMA);
+    /* Dimensionen des rotierten Bildes */
+    int rw = (s_rotation == 0) ? src_w : src_h;
+    int rh = (s_rotation == 0) ? src_h : src_w;
+    if (rw <= 0 || rh <= 0) return;
+
+    uint16_t *row = heap_caps_malloc(TFT_WIDTH * 2, MALLOC_CAP_DMA);
     if (!row) return;
 
-    for (int dy = 0; dy < TFT_HEIGHT; dy += 2) {
-        int ry = dy / 2;   /* Zeile im rotierten Bild */
+    for (int dy = 0; dy < TFT_HEIGHT; dy++) {
+        int ry = (dy * rh) / TFT_HEIGHT;
+        if (ry < 0) ry = 0;
+        if (ry >= rh) ry = rh - 1;
         for (int dx = 0; dx < TFT_WIDTH; dx++) {
-            int rx = dx / 2;
+            int rx = (dx * rw) / TFT_WIDTH;
+            if (rx < 0) rx = 0;
+            if (rx >= rw) rx = rw - 1;
             int sx, sy;
             if (s_rotation == 1) {            /* CW */
                 sx = src_w - 1 - ry;
@@ -181,19 +178,14 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
             } else if (s_rotation == 2) {     /* CCW */
                 sx = ry;
                 sy = src_h - 1 - rx;
-            } else {                          /* 0 = ohne Rotation (gestreckt) */
-                sx = (dx * src_w) / TFT_WIDTH;
-                sy = (dy * src_h) / TFT_HEIGHT;
+            } else {                          /* 0 = ohne Rotation */
+                sx = rx;
+                sy = ry;
             }
-            if (sx < 0) sx = 0;
-            if (sx >= src_w) sx = src_w - 1;
-            if (sy < 0) sy = 0;
-            if (sy >= src_h) sy = src_h - 1;
             row[dx] = src[sy * src_w + sx];
         }
-        memcpy(row + TFT_WIDTH, row, TFT_WIDTH * 2);
-        lcd_set_window(0, dy, TFT_WIDTH - 1, dy + 1);
-        esp_lcd_panel_io_tx_color(s_io, -1, row, TFT_WIDTH * 2 * 2);
+        lcd_set_window(0, dy, TFT_WIDTH - 1, dy);
+        esp_lcd_panel_io_tx_color(s_io, -1, row, TFT_WIDTH * 2);
     }
     heap_caps_free(row);
 }
@@ -377,4 +369,19 @@ void display_draw_rect(int x, int y, int w, int h, uint16_t color)
     display_draw_filled_rect(x, y + h - 1, w, 1, color);
     display_draw_filled_rect(x, y, 1, h, color);
     display_draw_filled_rect(x + w - 1, y, 1, h, color);
+}
+
+void display_test_pattern(void)
+{
+    ESP_LOGI(TAG, "Selbsttest: Rot");
+    display_fill(0xF800);
+    vTaskDelay(pdMS_TO_TICKS(800));
+    ESP_LOGI(TAG, "Selbsttest: Gruen");
+    display_fill(0x07E0);
+    vTaskDelay(pdMS_TO_TICKS(800));
+    ESP_LOGI(TAG, "Selbsttest: Blau");
+    display_fill(0x001F);
+    vTaskDelay(pdMS_TO_TICKS(800));
+    ESP_LOGI(TAG, "Selbsttest: Schwarz");
+    display_fill(0x0000);
 }
