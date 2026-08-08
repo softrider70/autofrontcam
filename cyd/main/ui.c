@@ -25,8 +25,9 @@
 static char s_status[40] = "Starte...";
 static int s_brightness = 0;
 
-/* Button-Flaechen (Display-Koordinaten, 240x320) - unten */
-#define BTN_Y   282
+/* Button-Flaechen (Display-Koordinaten, 240x320) - unten, unterhalb des
+ * Videobereichs (Video endet bei TFT_HEIGHT - UI_BTN_H, d.h. hier y=282). */
+#define BTN_Y   (TFT_HEIGHT - UI_BTN_H)
 #define BTN_H   34
 #define BTN1_X0 4
 #define BTN2_X0 84

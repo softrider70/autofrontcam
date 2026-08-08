@@ -3,12 +3,16 @@
  *
  * Der CYD (siehe Referenzprojekt cyd-display-car1) hat einen FT6236
  * I2C-Touch (SDA=GPIO6, SCL=GPIO5) - KEINEN XPT2046-SPI-Touch.
+ *
+ * Nutzt das NEUE i2c_master.h-API (i2c_new_master_bus/transmit_receive):
+ * der alte driver/i2c.h (i2c_driver_install/i2c_master_cmd_begin) panict
+ * auf diesem Board (Panic auf APP CPU -> INT-WDT-Reset).
  */
 
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "config.h"
@@ -18,41 +22,33 @@ static const char *TAG = "touch";
 
 #define FT6236_REG_TD_STATUS  0x02   /* Anzahl aktiver Touches + Touch 1 Daten */
 
+static i2c_master_bus_handle_t s_bus = NULL;
+static i2c_master_dev_handle_t s_dev = NULL;
 static bool s_touch_ok = false;   /* erst true, wenn I2C + FT6236 erfolgreich initialisiert */
-
-static esp_err_t ft6236_read_reg(uint8_t reg, uint8_t *data, size_t len)
-{
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (TOUCH_ADDR << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (TOUCH_ADDR << 1) | I2C_MASTER_READ, true);
-    if (len > 1) {
-        i2c_master_read(cmd, data, len - 1, I2C_MASTER_ACK);
-    }
-    i2c_master_read_byte(cmd, data + len - 1, I2C_MASTER_NACK);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(TOUCH_I2C_PORT, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    return ret;
-}
 
 esp_err_t touch_init(void)
 {
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = TOUCH_I2C_PORT,
         .sda_io_num = TOUCH_SDA,
         .scl_io_num = TOUCH_SCL,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = 400000,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
-    ESP_RETURN_ON_ERROR(i2c_param_config(TOUCH_I2C_PORT, &conf), TAG, "I2C-Konfiguration fehlgeschlagen");
-    ESP_RETURN_ON_ERROR(i2c_driver_install(TOUCH_I2C_PORT, conf.mode, 0, 0, 0), TAG, "I2C-Treiber fehlgeschlagen");
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_bus), TAG, "I2C-Bus fehlgeschlagen");
 
-    uint8_t td = 0;
-    esp_err_t ret = ft6236_read_reg(FT6236_REG_TD_STATUS, &td, 1);
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = TOUCH_ADDR,
+        .scl_speed_hz = 400000,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev), TAG, "I2C-Geraet fehlgeschlagen");
+
+    /* FT6236 pruefen: Touch-Punkt-Register lesen (0x02) */
+    uint8_t reg = FT6236_REG_TD_STATUS;
+    uint8_t val = 0;
+    esp_err_t ret = i2c_master_transmit_receive(s_dev, &reg, 1, &val, 1, pdMS_TO_TICKS(100));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "FT6236 antwortet nicht auf I2C - Touch deaktiviert");
         return ret;
@@ -68,8 +64,9 @@ bool touch_get_point(int *x, int *y)
         return false;   /* Touch nicht initialisiert -> kein Touch */
     }
 
+    uint8_t reg = FT6236_REG_TD_STATUS;
     uint8_t data[6];
-    if (ft6236_read_reg(FT6236_REG_TD_STATUS, data, 6) != ESP_OK) {
+    if (i2c_master_transmit_receive(s_dev, &reg, 1, data, 6, pdMS_TO_TICKS(50)) != ESP_OK) {
         return false;
     }
     if (!(data[0] & 0x0F)) {

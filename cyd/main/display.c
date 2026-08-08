@@ -200,25 +200,56 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
     if (!s_spi || !src) return;
     if (src_w <= 0 || src_h <= 0) return;
 
-    /* Dimensionen des rotierten Bildes */
-    int rw = (s_rotation == 0) ? src_w : src_h;
-    int rh = (s_rotation == 0) ? src_h : src_w;
-    if (rw <= 0 || rh <= 0) return;
+    /* Videobereich: zwischen OSD (oben) und Button-Leiste (unten) -
+     * das Bild uebermalt OSD/Buttons nicht, dadurch kein Flackern. */
+    const int vx0 = 0;
+    const int vy0 = UI_OSD_H;
+    const int vw  = TFT_WIDTH;
+    const int vh  = TFT_HEIGHT - UI_OSD_H - UI_BTN_H;
+    if (vh <= 0) return;
 
-    uint16_t *row = heap_caps_malloc(TFT_WIDTH * 2, MALLOC_CAP_DMA);
+    /* Bilddimensionen nach gewaehlter Drehung */
+    int iw, ih;
+    if (s_rotation == 0) { iw = src_w; ih = src_h; }
+    else                 { iw = src_h; ih = src_w; }
+
+    /* contain-fit: groesster Faktor, der in den Videobereich passt
+     * (Integer * 1000), dann zentrieren. Kein Verzerren, kein Müll. */
+    int s_x = (vw * 1000) / iw;
+    int s_y = (vh * 1000) / ih;
+    int scale = (s_x < s_y) ? s_x : s_y;
+    if (scale <= 0) return;
+    int dw = (iw * scale) / 1000;
+    int dh = (ih * scale) / 1000;
+    if (dw <= 0 || dh <= 0) return;
+    int ox = vx0 + (vw - dw) / 2;
+    int oy = vy0 + (vh - dh) / 2;
+
+    /* Nicht vom Bild bedeckte Videobereich-Flaechen schwarz fuellen
+     * (Balken oben/unten bzw. links/rechts), kein altes GRAM. */
+    if (oy > vy0) {
+        display_draw_filled_rect(vx0, vy0, vw, oy - vy0, 0x0000);
+        display_draw_filled_rect(vx0, oy + dh, vw, (vy0 + vh) - (oy + dh), 0x0000);
+    }
+    if (ox > vx0) {
+        display_draw_filled_rect(vx0, oy, ox - vx0, dh, 0x0000);
+        display_draw_filled_rect(ox + dw, oy, (vx0 + vw) - (ox + dw), dh, 0x0000);
+    }
+
+    uint16_t *row = heap_caps_malloc((size_t)dw * 2, MALLOC_CAP_DMA);
     if (!row) {
         ESP_LOGE(TAG, "display_blit_decoded: kein DMA-Puffer");
         return;
     }
 
-    for (int dy = 0; dy < TFT_HEIGHT; dy++) {
-        int ry = (dy * rh) / TFT_HEIGHT;
+    for (int dy = 0; dy < dh; dy++) {
+        int ry = (dy * ih) / dh;
         if (ry < 0) ry = 0;
-        if (ry >= rh) ry = rh - 1;
-        for (int dx = 0; dx < TFT_WIDTH; dx++) {
-            int rx = (dx * rw) / TFT_WIDTH;
+        if (ry >= ih) ry = ih - 1;
+        for (int dx = 0; dx < dw; dx++) {
+            int rx = (dx * iw) / dw;
             if (rx < 0) rx = 0;
-            if (rx >= rw) rx = rw - 1;
+            if (rx >= iw) rx = iw - 1;
             int sx, sy;
             if (s_rotation == 1) {            /* CW */
                 sx = src_w - 1 - ry;
@@ -232,8 +263,8 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
             }
             row[dx] = src[sy * src_w + sx];
         }
-        lcd_set_window(0, dy, TFT_WIDTH - 1, dy);
-        lcd_draw_bitmap(row, TFT_WIDTH * 2);
+        lcd_set_window(ox, oy + dy, ox + dw - 1, oy + dy);
+        lcd_draw_bitmap(row, (size_t)dw * 2);
     }
     lcd_flush();
     heap_caps_free(row);

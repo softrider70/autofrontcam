@@ -173,10 +173,13 @@ static void stream_task(void *arg)
         ui_set_status("HTTP-Fehler");
         vTaskDelete(NULL);
     }
+    /* Verbindung offen halten (Keep-Alive): spart TCP-Handshake pro Frame -> mehr fps */
+    esp_http_client_set_header(client, "Connection", "keep-alive");
 
     TickType_t last = xTaskGetTickCount();
     uint32_t frame_count = 0;
     bool was_connected = false;
+    TickType_t last_overlay = 0;
 
     while (1) {
         if (s_connected && client) {
@@ -193,9 +196,10 @@ static void stream_task(void *arg)
                 esp_jpeg_image_output_t info;
                 if (esp_jpeg_get_image_info(&jcfg, &info) == ESP_OK &&
                     info.width > 0 && info.height > 0) {
-                    /* Dekodier-Skalierung waehlen: QVGA (<=320x240) -> 1:2 fuer schaerferes
-                     * Bild, groesser -> 1:4 (RAM-schonend, kein PSRAM). */
-                    int div = (info.width <= 320 && info.height <= 240) ? 2 : 4;
+                    /* Dekodier-Skalierung waehlen: 1:2 solange der Puffer reicht
+                     * (QVGA 320x240 -> 160x120, CIF 400x296 -> 200x148), sonst 1:4
+                     * (SVGA 800x600 -> 200x150). Kein PSRAM, daher Puffer-Limit. */
+                    int div = ((size_t)info.width * info.height <= (size_t)2 * MAX_DECODED_BUF) ? 2 : 4;
                     size_t need = (size_t)(info.width / div) * (info.height / div) * 2;
                     /* Diagnose: nur bei Groessenwechsel loggen */
                     if (info.width != last_log_w || info.height != last_log_h) {
@@ -224,7 +228,12 @@ static void stream_task(void *arg)
                             if (esp_jpeg_decode(&jcfg, &out) == ESP_OK &&
                                 out.width > 0 && out.height > 0) {
                                 display_blit_decoded(decoded, out.width, out.height);
-                                ui_draw_overlay();
+                                /* OSD nur alle 500ms neu zeichnen (fps/Status) -
+                                 * vermeidet Dauerflackern bei jedem Frame. */
+                                if ((xTaskGetTickCount() - last_overlay) >= pdMS_TO_TICKS(500)) {
+                                    ui_draw_overlay();
+                                    last_overlay = xTaskGetTickCount();
+                                }
                                 frame_count++;
                             }
                         }
@@ -237,10 +246,14 @@ static void stream_task(void *arg)
         if (!s_connected && was_connected) {
             display_fill(0x0000);
             ui_set_status("WLAN getrennt");
+            last_overlay = 0;   /* OSD sofort wieder zeichnen */
         }
         was_connected = s_connected;
         if (!s_connected) {
-            ui_draw_overlay();
+            if ((xTaskGetTickCount() - last_overlay) >= pdMS_TO_TICKS(500)) {
+                ui_draw_overlay();
+                last_overlay = xTaskGetTickCount();
+            }
         }
 
         TickType_t now = xTaskGetTickCount();

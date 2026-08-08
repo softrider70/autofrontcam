@@ -79,7 +79,7 @@ extern "C" {
 #define CAM_CAPTURE_PATH    "/capture"
 #define CAM_API_PATH        "/api/config"
 
-#define STREAM_POLL_MS      120         /* ~8 fps Polling */
+#define STREAM_POLL_MS      50          /* ~20 fps Polling */
 #define STREAM_FETCH_TIMEOUT_MS 2000
 
 /* JPEG-Dekodierung: wird adaptiv an die tatsaechliche Kameragroesse angepasst
@@ -93,6 +93,12 @@ extern "C" {
 /* Anzeige-Drehung (fuer die 90°-Auffuellung des Porträt-Displays):
  * 1 = im Uhrzeigersinn, 2 = gegen den Uhrzeigersinn */
 #define DISPLAY_ROTATION    1
+
+/* =====================================================================
+ * UI-Layout: OSD-Bereich oben, Button-Leiste unten. Der Videobereich
+ * liegt dazwischen und wird vom Bild nicht uebermalt -> kein Flackern. */
+#define UI_OSD_H        20      /* Hoehe OSD oben (Version/fps/Status) */
+#define UI_BTN_H        38      /* Hoehe Button-Leiste unten */
 
 /* =====================================================================
  * FreeRTOS Task-Konfiguration
