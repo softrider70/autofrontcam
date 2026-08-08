@@ -24,30 +24,33 @@ extern "C" {
 #define APP_VERSION_MINOR   1
 
 /* =====================================================================
- * Display ILI9341 (240x320) - CYD Pinbelegung
+ * Display ILI9341 (240x320) - VERIFIZIERTE CYD-Pinbelegung
+ * (aus cyd-display-car1 uebernommen: CLK=14, MOSI=13, CS=15, DC=2,
+ *  RST=-1 [haengt am ESP32-Reset], BL=21)
  * ===================================================================== */
 #define TFT_SPI_HOST        SPI2_HOST
-#define TFT_SCK             18
-#define TFT_MOSI            23
-#define TFT_MISO            19      /* wird vom Touch benoetigt */
-#define TFT_CS              5
+#define TFT_SCK             14
+#define TFT_MOSI            13
+#define TFT_MISO            12
+#define TFT_CS              15
 #define TFT_DC              2
-#define TFT_RST             4
-#define TFT_BL              21      /* Backlight */
-#define TFT_BL_ON           1       /* active HIGH auf dem CYD */
+#define TFT_RST             -1      /* kein eigener Reset-Pin (am ESP32-RST) */
+#define TFT_BL              21      /* Backlight (active HIGH) */
+#define TFT_BL_ON           1
 
 #define TFT_WIDTH           240
 #define TFT_HEIGHT          320
 
+/* MADCTL 0x40 (MX=1, RGB) - korrigierte Farben/Ausrichtung laut Referenz */
+#define ILI9341_MADCTL      0x40
+
 /* =====================================================================
- * Touch XPT2046 - CYD Pinbelegung (gleicher SPI-Bus wie Display)
+ * Touch FT6236 kapazitiv (I2C) - CYD (nicht XPT2046!)
  * ===================================================================== */
-#define TOUCH_CS            14
-#define TOUCH_IRQ           27
-#define TOUCH_MIN_X         300     /* Rohwert-Kalibrierung (min/max) */
-#define TOUCH_MAX_X         3800
-#define TOUCH_MIN_Y         300
-#define TOUCH_MAX_Y         3800
+#define TOUCH_I2C_PORT      I2C_NUM_0
+#define TOUCH_SDA           6
+#define TOUCH_SCL           5
+#define TOUCH_ADDR          0x38
 
 /* =====================================================================
  * WiFi (Station) - verbindet sich mit dem ESP32-CAM SoftAP

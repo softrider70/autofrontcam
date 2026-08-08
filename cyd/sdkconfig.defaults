@@ -47,3 +47,6 @@ CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 # Compiler-Optimierung: -Os (Groessenoptimierung) - verhindert IRAM-Ueberlauf
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_MBEDTLS_COMPILER_OPTIMIZATION_SIZE=y
+
+# Legacy-I2C-Treiber (fuer FT6236-Touch) - Deprecation-Warnung unterdruecken
+CONFIG_I2C_SUPPRESS_DEPRECATE_WARN=y

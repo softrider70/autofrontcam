@@ -38,7 +38,11 @@ void app_main(void)
     display_test_pattern();
     display_draw_text(24, 150, "autofrontcam CYD", 0xFFFF, 0x0000);
 
-    ESP_ERROR_CHECK(touch_init());
+    /* Touch ist optional: Wenn der FT6236 nicht antwortet, trotzdem weiterstarten */
+    esp_err_t tret = touch_init();
+    if (tret != ESP_OK) {
+        ESP_LOGW(TAG, "Touch nicht erreichbar - fahre ohne Touch fort");
+    }
 
     stream_start();
     ui_start();

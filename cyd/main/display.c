@@ -1,13 +1,13 @@
 /*
- * display.c - ILI9341 (240x320) fuer CYD, eigener Minimal-Treiber
+ * display.c - CYD-Display (ILI9341, 240x320), eigener Treiber
  *
- * Hinweis: ESP-IDF 6.x bringt keinen ILI9341-Treiber mehr mit (nur ST7789/SSD1306),
- * daher wird das Display direkt ueber esp_lcd_panel_io_spi angesteuert:
- *   - Kommandos/Parameter:  esp_lcd_panel_io_tx_param()
- *   - Pixeldaten:           esp_lcd_panel_io_tx_color()
- * Farbdaten sind RGB565 im BIG-ENDIAN-Format (Byte 0 = High-Byte), wie es
- * der ILI9341 erwartet. Die JPEG-Dekodierung liefert mit swap_color_bytes=1
- * ebenfalls Big-Endian -> konsistent.
+ * Pin-Belegung und Init-Sequenz stammen aus dem verifizierten Projekt
+ * cyd-display-car1: CLK=14, MOSI=13, CS=15, DC=2, RST=-1 (haengt am
+ * ESP32-Reset), BL=21; MADCTL 0x40; vollstaendiges ILI9341-Init.
+ * ESP-IDF 6.x hat keinen ILI9341-Treiber mehr, daher Ansteuerung ueber
+ * esp_lcd_panel_io_spi (Kommandos: tx_param, Pixeldaten: tx_color mit
+ * RAMWR 0x2C). Farbdaten RGB565 BIG-ENDIAN; JPEG-Dekodierung liefert mit
+ * swap_color_bytes=1 ebenfalls Big-Endian.
  */
 
 #include <string.h>
@@ -45,9 +45,7 @@ static void lcd_cmd_data(uint8_t cmd, const uint8_t *data, size_t len)
     esp_lcd_panel_io_tx_param(s_io, cmd, data, len);
 }
 
-/* Adressfenster setzen (CASET/PASET). Die Pixeldaten werden danach mit
- * lcd_draw_bitmap() geschrieben (RAMWR zusammen mit den Daten - gleiches Muster
- * wie der getestete ESP-IDF ST7789-Treiber). */
+/* Adressfenster setzen (CASET/PASET) */
 static void lcd_set_window(int x0, int y0, int x1, int y1)
 {
     uint8_t d[4];
@@ -59,7 +57,7 @@ static void lcd_set_window(int x0, int y0, int x1, int y1)
     esp_lcd_panel_io_tx_param(s_io, 0x2B, d, 4);   /* PASET */
 }
 
-/* Pixeldaten schreiben: RAMWR (0x2C) zusammen mit den Daten in einem CS-Zug */
+/* Pixeldaten schreiben: RAMWR (0x2C) zusammen mit den Daten */
 static void lcd_draw_bitmap(const void *data, size_t len)
 {
     esp_err_t err = esp_lcd_panel_io_tx_color(s_io, 0x2C, data, len);
@@ -68,9 +66,8 @@ static void lcd_draw_bitmap(const void *data, size_t len)
     }
 }
 
-/* Wartet auf alle ausstehenden Farb-Transfers (NOP-Kommando via tx_param,
- * das intern auf inflight-Transaktionen wartet) - ERST DANN darf der
- * DMA-Puffer freigegeben werden! */
+/* Wartet auf alle ausstehenden Farb-Transfers (NOP via tx_param, das intern
+ * auf inflight-Transaktionen wartet) - ERST DANN den DMA-Puffer freigeben! */
 static void lcd_flush(void)
 {
     esp_lcd_panel_io_tx_param(s_io, 0x00, NULL, 0);
@@ -78,47 +75,61 @@ static void lcd_flush(void)
 
 static void ili9341_init_panel(void)
 {
-    /* Hardware-Reset */
-    gpio_set_level(TFT_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level(TFT_RST, 1);
+    /* Kein eigener Reset-Pin (TFT_RST = -1): Panel resettet mit dem ESP32.
+     * Kurz warten, dann SWRESET + Sleep-Out. */
     vTaskDelay(pdMS_TO_TICKS(150));
-
     lcd_cmd(0x01);                 /* SWRESET */
-    vTaskDelay(pdMS_TO_TICKS(150));
+    vTaskDelay(pdMS_TO_TICKS(120));
     lcd_cmd(0x11);                 /* SLPOUT */
-    vTaskDelay(pdMS_TO_TICKS(150));
+    vTaskDelay(pdMS_TO_TICKS(120));
 
-    /* Universelle Init-Sequenz: funktioniert mit ILI9341 UND ST7789 (CYD-Varianten).
-     * Bewusst KEINE chipspezifischen Gamma-/Power-Register, damit keine Variante
-     * durcheinandergebracht wird. */
-    lcd_cmd_data(0x3A, (const uint8_t[]){ 0x55 }, 1);   /* Pixel Format 16bpp */
-    lcd_cmd_data(0x36, (const uint8_t[]){ 0x08 }, 1);   /* MADCTL: nur BGR (Drehung in Software) */
-
-#if CYD_INVERT_COLOR
-    lcd_cmd(0x21);                 /* INVON: invertierte Farben (ST7789-Variante) */
-#else
-    lcd_cmd(0x20);                 /* INVOFF: normale Farben */
-#endif
-
-    lcd_cmd(0x29);                 /* Display ON */
+    /* Vollstaendige ILI9341-Init-Sequenz (verifiziert in cyd-display-car1) */
+    static const uint8_t init_seq[] = {
+        0xEF, 3, 0x03, 0x80, 0x02,
+        0xCF, 3, 0x00, 0xC1, 0x30,
+        0xED, 4, 0x64, 0x03, 0x12, 0x81,
+        0xE8, 3, 0x85, 0x00, 0x78,
+        0xCB, 5, 0x39, 0x2C, 0x00, 0x34, 0x02,
+        0xF7, 1, 0x20,
+        0xEA, 2, 0x00, 0x00,
+        0xC0, 1, 0x23,
+        0xC1, 1, 0x11,
+        0xC5, 2, 0x27, 0x2B,
+        0xC7, 1, 0x1E,
+        0x36, 1, ILI9341_MADCTL,
+        0x3A, 1, 0x55,
+        0xB1, 2, 0x00, 0x1B,
+        0xB6, 3, 0x08, 0x82, 0x27,
+        0xF2, 1, 0x00,
+        0x26, 1, 0x01,
+        0xE0, 15, 0x0F,0x31,0x2B,0x0C,0x0E,0x06,0x38,0x0F,0x44,0x49,0x09,0x06,0x15,0x12,0x0C,
+        0xE1, 15, 0x00,0x0E,0x14,0x03,0x11,0x07,0x31,0xC1,0x48,0x37,0x06,0x09,0x0A,0x13,0x13,
+        0x11, 0,
+        0x29, 0,
+    };
+    size_t i = 0;
+    while (i < sizeof(init_seq)) {
+        uint8_t cmd = init_seq[i++];
+        uint8_t cnt = init_seq[i++];
+        lcd_cmd_data(cmd, &init_seq[i], cnt);
+        i += cnt;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
 }
-
 /* ------------------------------------------------------------------ */
 /* Oeffentliche API                                                    */
 /* ------------------------------------------------------------------ */
 esp_err_t display_init(void)
 {
+    /* Nur BL wird hier als GPIO konfiguriert; CS/DC uebernimmt der Panel-IO-Treiber */
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << TFT_CS) | (1ULL << TFT_DC) | (1ULL << TFT_RST) | (1ULL << TFT_BL),
+        .pin_bit_mask = (1ULL << TFT_BL),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "GPIO-Konfiguration fehlgeschlagen");
-
-    gpio_set_level(TFT_CS, 1);
     gpio_set_level(TFT_BL, !TFT_BL_ON);
 
     spi_bus_config_t buscfg = {
@@ -135,7 +146,7 @@ esp_err_t display_init(void)
         .cs_gpio_num = TFT_CS,
         .dc_gpio_num = TFT_DC,
         .spi_mode = 0,
-        .pclk_hz = 20 * 1000 * 1000,   /* 20 MHz: stabiler als 40 MHz auf CYD-Leiterbahnen */
+        .pclk_hz = 40 * 1000 * 1000,   /* 40 MHz (wie im Referenzprojekt) */
         .trans_queue_depth = 10,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
@@ -144,7 +155,7 @@ esp_err_t display_init(void)
                         TAG, "Panel-IO init fehlgeschlagen");
 
     ili9341_init_panel();
-    ESP_LOGI(TAG, "ILI9341/ST7789 initialisiert (%dx%d), freier Heap: %lu B",
+    ESP_LOGI(TAG, "ILI9341 initialisiert (%dx%d), freier Heap: %lu B",
              TFT_WIDTH, TFT_HEIGHT, (unsigned long)esp_get_free_heap_size());
     display_fill(0x0000);
     return ESP_OK;

@@ -22,8 +22,6 @@
 #include "stream.h"
 #include "ui.h"
 
-static const char *TAG = "ui";
-
 static char s_status[40] = "Starte...";
 static int s_brightness = 0;
 

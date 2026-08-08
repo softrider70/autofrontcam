@@ -18,6 +18,8 @@ idf_component_register(
         esp_lcd
         esp_driver_spi
         esp_driver_gpio
+        esp_driver_i2c
+        driver
         heap
         esp_jpeg
 )
