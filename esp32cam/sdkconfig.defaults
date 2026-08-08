@@ -59,6 +59,17 @@ CONFIG_LOG_MAXIMUM_LEVEL=4
 # LWIP
 CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 
+# TCP-Haertung (CYD-Client): Der CYD baut pro Frame eine NEUE TCP-Verbindung auf
+# (kein Keep-Alive). Jede geschlossene Verbindung bleibt 2*MSL als TIME_WAIT-PCB
+# bestehen. Bei MSL=60000 (60s) und nur 16 aktiven TCP-PCBs sind alle PCBs nach
+# kurzer Zeit belegt -> "Failed to open a new connection" / "select() timeout"
+# am CYD. Fix: deutlich mehr TCP-PCBs + kurze TIME_WAIT (2*2000ms = 4s).
+CONFIG_LWIP_MAX_ACTIVE_TCP=48
+CONFIG_LWIP_MAX_LISTENING_TCP=16
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_TCP_MSL=2000
+CONFIG_LWIP_SO_REUSE=y
+
 # mDNS
 CONFIG_MDNS_ENABLE_NETWORKING=y
 

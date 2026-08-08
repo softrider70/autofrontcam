@@ -315,7 +315,7 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
 | **Touch-IC** | **XPT2046** (resistiv) auf einem **separaten SPI-Bus `SPI3`** (SCLK=25, MOSI=32, MISO=39, CS=33, IRQ=36). Der frühere Versuch mit FT6236/I2C auf GPIO 6 crashte — **GPIO 6 ist beim ESP32-WROOM ein Flash-SPI-Pin** und als I2C nicht nutzbar. |
 | **Touch-Pins** | SCLK=25, MOSI=32, MISO=39, CS=33, IRQ=36 (2,5 MHz, kein DMA). |
 | **Druckschwelle** | **300** (Rauschen 0–50, echter Stiftdruck ~2000). Verhindert Geister-Touches ohne Berührung. |
-| **Touch-Kalibrierung** | Basis-Umrechnung `dx = x_raw*320/4096`, `dy = y_raw*240/4096` ist **korrekt** (4 Eckpunkte + Mitte verifiziert: keine Achsen-Vertauschung, keine Invertierung). Resistiver Touch braucht einen **Stift**, der Finger liefert nur ~15–25 Druck. |
+| **Touch-Kalibrierung** | Basis-Umrechnung `dx = x_raw*320/4096`, `dy = y_raw*240/4096` ist **korrekt** (4 Eckpunkte + Mitte verifiziert: keine Achsen-Vertauschung, keine Invertierung). Die Kalibrierung wurde **mit dem Fingernagel** erfolgreich durchgeführt (Druck deutlich über der 300er-Schwelle); weiche Fingerkuppe liefert weniger Druck und kann unzuverlässig sein. |
 | **Kein PSRAM** | Klassischer CYD (ESP32-2432S028R) hat **kein PSRAM** → JPEG-Dekodierung läuft adaptiv (1:2 solange Puffer reicht, sonst 1:4), `MAX_DECODED_BUF 60000`. |
 | **Anzeige-Rotation** | Kamerabild ist quer, Display quer (320×240) → `DISPLAY_ROTATION 0`. ROT-Button im Menü togglet CW/CCW. |
 
@@ -332,8 +332,9 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
 
 ### CYD — Tasten-/Kalibrierungs-Workflow
 
-1. **Kalibrierung (KALIB):** Menü öffnen → **KALIB** → mit dem **Stift** die 4 Ecken +
-   die Mitte drücken (je ~1 s). Die Rohwerte erscheinen im seriellen Monitor als
+1. **Kalibrierung (KALIB):** Menü öffnen → **KALIB** → die 4 Ecken +
+   die Mitte drücken (je ~1 s; **Fingernagel oder Stift**, weiche Fingerkuppe reicht evtl.
+   nicht für die Druckschwelle). Die Rohwerte erscheinen im seriellen Monitor als
    `touch: KALIB: x_raw=... y_raw=...` und die umgerechneten Koordinaten im OSD als `T:x,y`.
 2. **Auswertung:** Die Punktwolke zeigt, ob Achsen getauscht/invertiert werden müssen —
    aktuell ist die Basis-Umrechnung bereits korrekt (verifiziert), es ist keine Matrix nötig.
@@ -348,11 +349,29 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
   wieder freigegeben — langsames Senden blockiert die Kamera nicht.
 - **Kein Keep-Alive** vom CYD: Der CAM-httpd resettet bei Keep-Alive sonst die Verbindung
   (`Connection reset by peer`, fps-Einbruch) → der CYD baut pro Frame eine neue Verbindung auf.
-- **Bekanntes offenes Thema (Work in Progress):** Bei ungünstiger CAM-Situation meldet der
-  CYD `Failed to open a new connection` / `select() timeout` (fps 3, kein Bild), obwohl WiFi
-  verbunden ist. Ursache ist **CAM-seitig** (nicht der CYD-Client). Geplante Härtung am CAM:
-  alte/halboffene TCP-Verbindungen und AP-Slots automatisch zurücksetzen, ggf. den AP neu
-  starten, damit die CAM **eigenständig** (ohne manuellen Reset) wieder einen Client bedient.
+
+### CAM — Selbstheilung (Self-Healing-Watchdog)
+
+> **Problem (behoben):** Der CYD baut pro Frame eine **neue TCP-Verbindung** auf (kein
+> Keep-Alive). Jede geschlossene Verbindung blieb als TIME_WAIT-PCB (`2*MSL`) bestehen.
+> Mit nur 16 aktiven TCP-PCBs und `MSL=60000` (60 s) waren nach kurzer Zeit **alle PCBs
+> belegt** → der CAM-Server nahm keine neuen Verbindungen mehr an → der CYD meldete
+> `Failed to open a new connection` / `select() timeout` (fps 3, kein Bild).
+> Da die CAM **verbaut** ist und nicht manuell resettet werden kann, heilt sie sich jetzt
+> selbst.
+
+**Umgesetzte Härtung (Firmware):**
+- **LWIP:** `CONFIG_LWIP_MAX_ACTIVE_TCP=48` (statt 16), `CONFIG_LWIP_TCP_MSL=2000`
+  (TIME_WAIT nur 4 s statt 120 s), `CONFIG_LWIP_MAX_SOCKETS=16` → tote PCBs blockieren
+  den Server nicht mehr.
+- **Self-Healing-Watchdog** (`conn_watchdog_task` in `main.c`): alle 10 s ein lokaler
+  Test-Connect auf Port 80. Eskalation bei Fehlschlägen:
+  1. **2 Fehlschläge:** HTTP-Server neu starten (`httpd_stop` + `httpd_start` → resettet
+     alle offenen/halboffenen Verbindungen und PCBs)
+  2. **4 Fehlschläge:** WiFi/AP neu starten (`esp_wifi_stop` + `esp_wifi_start`)
+  3. **8 Fehlschläge:** kompletter Software-Reset (`esp_restart`)
+- Damit arbeitet die CAM **eigenständig** (ohne manuellen Reset) und hat nach einem
+  Selbstheilungs-Vorgang sofort wieder einen Client.
 
 ## Konfiguration
 
@@ -393,6 +412,8 @@ Alle wichtigen Parameter in `include/config.h` (jeweils pro Projekt):
 | Spannungsanzeige + Modus/Grenzwert (Radiobutton) | ✅ implementiert |
 | NVS-Persistenz (Linien, Modus, Grenzwert) | ✅ implementiert |
 | MJPEG-Stream (Port 81) | ❌ entfernt (nur `/capture`) |
+| LWIP-Härtung (TCP-PCBs, kurze TIME_WAIT) | ✅ implementiert |
+| Self-Healing-Watchdog (Server/WiFi/Reset) | ✅ implementiert |
 
 **Display-Client (`cyd/`):**
 
@@ -424,7 +445,7 @@ Die wichtigsten, am realen Board verifizierten Erkenntnisse (Ausführliches sieh
 | **Touch-Koordinaten im Log unlesbar** | HTTP-Fehler-Spam überflutete das Log | Log-Level HTTP auf `ESP_LOG_NONE`; Koordinaten zusätzlich im OSD (`T:x,y`) |
 | **OSD/Menü friert ein** bei ausbleibenden Frames | Overlay hing am Frame-Fetch | **Overlay-Timer alle 500 ms unabhängig von Frames** |
 | **`Connection reset by peer`/fps-Einbruch** am CYD | CAM-httpd unterstützt kein Keep-Alive | **kein Keep-Alive**, Verbindung pro Frame neu |
-| **CAM nimmt keine Verbindungen an** (fps 3, `select() timeout`) | offen, CAM-seitig — siehe „CAM — Stream-Architektur & bekannte Punkte“ | WIP: AP-/Verbindungs-Härtung am CAM |
+| **CAM nimmt keine Verbindungen an** (fps 3, `select() timeout`) | TIME_WAIT-PCB-Erschöpfung (nur 16 TCP-PCBs, MSL 60s) bei Verbindungs-pro-Frame | **LWIP härten** (48 PCBs, MSL 2s) + **Self-Healing-Watchdog** (Server/WiFi/Reset) |
 
 ## Abhängigkeiten
 

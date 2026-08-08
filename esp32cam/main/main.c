@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
+#include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
@@ -308,6 +309,11 @@ static const httpd_uri_t captive_apple_old = {
     .uri = "/library/test/success.html", .method = HTTP_GET, .handler = captive_handler,
 };
 
+/* =====================================================================
+ * Haupt-Webserver (Port STREAM_PORT=80)
+ * ===================================================================== */
+static httpd_handle_t s_server = NULL;
+
 static void start_main_server(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -318,9 +324,9 @@ static void start_main_server(void)
     cfg.send_wait_timeout = 5;   /* s: langsames SoftAP-Senden nicht sofort abbrechen */
     cfg.recv_wait_timeout = 5;
 
-    httpd_handle_t server = NULL;
-    if (httpd_start(&server, &cfg) != ESP_OK) {
+    if (httpd_start(&s_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Haupt-Server Start fehlgeschlagen");
+        s_server = NULL;
         return;
     }
 
@@ -340,26 +346,112 @@ static void start_main_server(void)
         .uri = "/api/config", .method = HTTP_POST, .handler = api_config_post_handler,
         .user_ctx = NULL
     };
-    httpd_register_uri_handler(server, &root);
-    httpd_register_uri_handler(server, &capture);
-    httpd_register_uri_handler(server, &api_get);
-    httpd_register_uri_handler(server, &api_post);
+    httpd_register_uri_handler(s_server, &root);
+    httpd_register_uri_handler(s_server, &capture);
+    httpd_register_uri_handler(s_server, &api_get);
+    httpd_register_uri_handler(s_server, &api_post);
 
     /* OTA-Handler (/update, /status) auf dem Hauptserver registrieren */
-    ota_register_handlers(server);
+    ota_register_handlers(s_server);
 
     /* Captive-Portal-Pruef-URLs (iOS/Android/Windows) auf die Web-UI umleiten */
-    httpd_register_uri_handler(server, &captive_apple);
-    httpd_register_uri_handler(server, &captive_android);
-    httpd_register_uri_handler(server, &captive_windows);
-    httpd_register_uri_handler(server, &captive_apple_old);
+    httpd_register_uri_handler(s_server, &captive_apple);
+    httpd_register_uri_handler(s_server, &captive_android);
+    httpd_register_uri_handler(s_server, &captive_windows);
+    httpd_register_uri_handler(s_server, &captive_apple_old);
 
     /* WiFi-Captive-Portal nur registrieren, wenn benoetigt (keine Credentials) */
     if (wifi_portal_needed()) {
-        wifi_register_portal(server);
+        wifi_register_portal(s_server);
     }
 
     ESP_LOGI(TAG, "Haupt-Webserver auf Port %d gestartet", STREAM_PORT);
+}
+
+/* Server stoppen (gibt alle offenen TCP-Verbindungen/PCBs frei) und neu starten. */
+static void restart_main_server(void)
+{
+    ESP_LOGW(TAG, "Server-Neustart (resettet offene Verbindungen/PCBs)");
+    if (s_server) {
+        httpd_stop(s_server);
+        s_server = NULL;
+    }
+    /* Kurz warten, damit der alte Socket/Port wirklich frei ist */
+    vTaskDelay(pdMS_TO_TICKS(200));
+    start_main_server();
+}
+
+/* WiFi/AP neu starten. In dieser IDF-Version gibt es kein esp_wifi_restart(),
+ * daher stop + start (die Wifi-Konfiguration bleibt im Treiber erhalten). */
+static void restart_wifi_ap(void)
+{
+    ESP_LOGW(TAG, "WiFi/AP-Neustart (eigenstaendige Heilung)");
+    esp_wifi_stop();
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_wifi_start();
+}
+
+/* =====================================================================
+ * Self-Healing-Watchdog (Verbindungs-Monitor)
+ *
+ * Der CYD baut pro Frame eine NEUE TCP-Verbindung auf (kein Keep-Alive).
+ * Jede geschlossene Verbindung bleibt als TIME_WAIT-PCB (2*MSL) bestehen.
+ * Sind alle TCP-PCBs belegt, nimmt der Server keine neuen Verbindungen mehr
+ * an -> "Failed to open a new connection" / "select() timeout" am CYD.
+ * Da die CAM verbaut ist und nicht manuell resettet werden kann, heilt sich
+ * das System hier selbst (Eskalation):
+ *   1) lokaler Test-Connect auf Port 80 schlaegt fehl
+ *   2) nach N Fehlschlaegen: httpd neu starten (PCBs/Verbindungen frei)
+ *   3) haelt das an: WiFi/AP neu starten (esp_wifi_restart)
+ *   4) weiterhin: kompletter Software-Reset (esp_restart)
+ * ===================================================================== */
+#define WATCHDOG_CHECK_MS        10000
+#define WATCHDOG_FAIL_SERVER     2      /* Fehlschlage bis Server-Neustart */
+#define WATCHDOG_FAIL_WIFI       4      /* Fehlschlage bis WiFi/AP-Neustart */
+#define WATCHDOG_FAIL_RESET      8      /* Fehlschlage bis Software-Reset */
+
+static bool server_connect_ok(void)
+{
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(STREAM_PORT);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) return false;
+    int rc = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
+    close(sock);
+    return (rc == 0);
+}
+
+static void conn_watchdog_task(void *arg)
+{
+    int fails = 0;
+    vTaskDelay(pdMS_TO_TICKS(3000));   /* Erst nach dem Start pruefen */
+    while (1) {
+        if (server_connect_ok()) {
+            fails = 0;
+        } else {
+            fails++;
+            ESP_LOGW(TAG, "Watchdog: Server nicht erreichbar (%d Fehlschlage)", fails);
+            if (fails == WATCHDOG_FAIL_SERVER) {
+                restart_main_server();
+            } else if (fails == WATCHDOG_FAIL_WIFI) {
+                restart_wifi_ap();
+            } else if (fails >= WATCHDOG_FAIL_RESET) {
+                ESP_LOGE(TAG, "Watchdog: Selbstheilung erfolglos -> Software-Reset");
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_restart();
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(WATCHDOG_CHECK_MS));
+    }
+}
+
+void conn_watchdog_start(void)
+{
+    xTaskCreate(conn_watchdog_task, "conn_wdog", 3072, NULL, 3, NULL);
+    ESP_LOGI(TAG, "Verbindungs-Watchdog gestartet");
 }
 
 /* =====================================================================
@@ -449,6 +541,11 @@ void app_main(void)
 
     /* Haupt-Webserver (Web-UI + API + /capture + OTA + Portal) starten */
     start_main_server();
+
+    /* Self-Healing-Watchdog: resettet bei Verbindungs-Problemen eigenstaendig
+     * den Server, dann WiFi/AP, zuletzt per Software-Reset (die CAM ist verbaut
+     * und kann nicht manuell resettet werden). */
+    conn_watchdog_start();
 
     /* Kurzer Boot-Blinker (3x), danach LED aus */
     led_boot_blink();
