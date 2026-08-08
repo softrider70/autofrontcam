@@ -1,9 +1,16 @@
-# Autofrontcam — Rechte-Seiten-Kamera für den Škoda (ESP32-CAM + OV2640)
+# Autofrontcam — Rechte-Seiten-Kamera für den Škoda (ESP32-CAM + OV2640 + CYD-Display)
 
 Eine **WiFi-Seitenkamera** für ein Škoda-Fahrzeug auf Basis des **AI-Thinker ESP32-CAM**
 (ESP32-D0WD-V3 + OV2640). Die Kamera liefert einen **MJPEG-Livestream** über ein eigenes
 WLAN (Access Point) an ein **iPhone 6** im Fahrzeuginnenraum und unterstützt
 **OTA-Firmware-Updates** über einen eingebetteten Webserver.
+
+Zusätzlich gibt es eine **CYD-Variante** (Cheap Yellow Display, ESP32-2432S028R): ein
+eigenständiger **Display-Client**, der sich per WLAN mit dem Kamera-SoftAP verbindet, das
+Kamerabild auf dem ILI9341-Display (240×320) anzeigt und per Touch Helligkeit/Rotation steuert.
+
+> **Zwei Geräte = zwei eigenständige ESP-IDF-Projekte im selben Repo** (`esp32cam/` + `cyd/`),
+> keine Branches. Details siehe unten unter „Zwei Geräte – Projektaufbau“.
 
 ## Anwendungsfall
 
@@ -175,62 +182,98 @@ Web-UI: OTA-Button → Datei auswählen → Upload → Neustart
 
 ## Schnellstart
 
-### Build
+Beide Geräte sind **eigenständige ESP-IDF-Projekte** im Repo. Vor jedem Kommando in das
+jeweilige Projektverzeichnis wechseln — so ist immer klar, **welches Gerät am USB-Port
+angesteckt sein muss**:
+
+| Projekt | Gerät | Verzeichnis | Firmware |
+|---|---|---|---|
+| `esp32cam` | AI-Thinker ESP32-CAM (COM4) | `esp32cam/` | `autofrontcam.bin` |
+| `cyd` | CYD ESP32-2432S028R | `cyd/` | `autofrontcam_cyd.bin` |
+
 ```powershell
-. ..\lora\activate-esp-idf.ps1   # ESP-IDF Umgebung aktivieren
+. ..\lora\activate-esp-idf.ps1          # ESP-IDF Umgebung aktivieren (einmal pro Terminal)
+cd esp32cam                             # ODER: cd cyd
 idf.py build
 ```
 
-### Flash (initial)
-```powershell
-idf.py -p COM4 flash
-```
+### Flash
+> **Achtung:** Es muss genau das Gerät am USB-Port hängen, das du flashen willst!
+> ESP32-CAM ↔ CYD **nicht** verwechseln — die Firmware ist nicht kompatibel.
 
-### OTA Flash (nach erstem Flash)
 ```powershell
-idf.py build
-idf.py -p COM4 flash
+cd esp32cam; idf.py -p COM4 flash      # ESP32-CAM einstecken
+cd cyd;     idf.py -p COM4 flash      # CYD einstecken
 ```
 
 ### Monitor
 ```powershell
-idf.py -p COM4 monitor
+cd esp32cam; idf.py -p COM4 monitor    # ESP32-CAM
+cd cyd;     idf.py -p COM4 monitor    # CYD
 ```
 
 ## Projektstruktur
 
 ```
 autofrontcam/
+├── esp32cam/                  ESP-IDF-Projekt 1: Kamera (AI-Thinker ESP32-CAM)
+│   ├── CMakeLists.txt         Projekt-Root (verweist auf ../components)
+│   ├── sdkconfig.defaults     Board-Konfiguration (4MB, PSRAM, OTA)
+│   ├── partitions.csv         OTA-Partitionen (4MB)
+│   ├── main/                  Quellcode des Kameramoduls
+│   │   ├── main.c             Hauptprogramm (Stream-Server, Web-UI, Config-API)
+│   │   ├── index.html         Eingebettete Touch-Web-UI
+│   │   ├── camera.c           OV2640 Kameratreiber
+│   │   ├── wifi.c             WiFi-Manager (AP + Captive Portal)
+│   │   ├── ota.c              OTA-Webserver (Upload)
+│   │   ├── voltage.c          Spannungsmessung (ADC GPIO35)
+│   │   ├── sleep.c            Sleep-/Wake-up-Steuerung
+│   │   ├── lines.c            Kalibrierungslinien (NVS-Persistenz)
+│   │   └── ...                (stack_monitor.c, heap_monitor.c, dns_server.c)
+│   └── include/               Header des Kameramoduls (config.h, camera.h, ...)
+├── cyd/                       ESP-IDF-Projekt 2: Display-Client (CYD)
+│   ├── CMakeLists.txt         Projekt-Root (verweist auf ../components)
+│   ├── sdkconfig.defaults     Board-Konfiguration (4MB, kein PSRAM)
+│   ├── partitions.csv         Einfaches Layout ohne OTA
+│   ├── main/
+│   │   ├── main.c             Einstieg (NVS, Display, Touch, Tasks)
+│   │   ├── display.c          ILI9341-Treiber (240x320) + 5x7-Font
+│   │   ├── stream.c           WiFi-STA + JPEG-Abruf + Dekodierung + Anzeige
+│   │   ├── touch.c            XPT2046-Touch (gleicher SPI-Bus)
+│   │   └── ui.c               OSD + Buttons (Helligkeit/Rotation -> CAM-API)
+│   └── include/               Header des CYD (config.h, version.h.in)
 ├── components/
-│   ├── main/                 Quellcode
-│   │   ├── main.c            Hauptprogramm (Stream-Server, Web-UI, Config-API)
-│   │   ├── index.html        Eingebettete Touch-Web-UI (Stream + Overlay-Linien)
-│   │   ├── camera.c          OV2640 Kameratreiber
-│   │   ├── wifi.c            WiFi-Manager (AP + Captive Portal)
-│   │   ├── ota.c             OTA-Webserver (Upload)
-│   │   ├── nvs_config.c      NVS-Konfigurationsspeicher
-│   │   ├── voltage.c         Spannungsmessung (ADC GPIO35)
-│   │   ├── sleep.c           Sleep-/Wake-up-Steuerung (Deep-Sleep)
-│   │   ├── lines.c           Kalibrierungslinien (NVS-Persistenz)
-│   │   ├── stack_monitor.c   Stack-Ueberwachung
-│   │   └── heap_monitor.c    Heap-Ueberwachung
-│   └── esp_hal_clock/        Lokale Komponente (fehlt in IDF v6.1-dev)
-├── include/                  Header
-│   ├── config.h              Hardware-Konfiguration (ESP32-CAM)
-│   ├── camera.h              Kamera-API
-│   ├── wifi.h                WiFi-API
-│   ├── ota.h                 OTA-API
-│   ├── nvs_config.h          NVS-API
-│   ├── voltage.h             Spannungsmessung-API
-│   ├── sleep.h               Sleep-API
-│   └── lines.h               Linien-API
-├── CMakeLists.txt            ESP-IDF Projekt
-├── sdkconfig.defaults        Board-Konfiguration (4MB, PSRAM)
-├── partitions.csv            OTA-Partitionen (4MB)
+│   └── nvs_config/            GEMEINSAME Komponente (NVS-Helfer, beide Projekte)
 ├── tools/
-│   └── increment_build.py    Build-Nummer erhöhen
-└── components/main/idf_component.yml   Abhängigkeiten (esp32-camera)
+│   └── increment_build.py     Build-Nummer erhöhen (--project-dir)
+└── README.md
 ```
+
+**Wichtig:** `esp32cam` und `cyd` sind getrennte Builds mit getrennten `build/`-Ordnern
+und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components/nvs_config/`.
+
+## Zwei Geräte – Projektaufbau
+
+**Warum zwei Unterprojekte und keine Branches?**
+- Die beiden Geräte sind hardwaremäßig völlig verschieden: ESP32-CAM (Kamera-Treiber,
+  PSRAM, OTA) vs. CYD (Display-Treiber, Touch, WiFi-Client, kein PSRAM). Sie brauchen
+  unterschiedliche `sdkconfig`, unterschiedliche Partitionstabellen und eigene Builds.
+- **Branches** würden `sdkconfig`, `build/`-Artefakte und das generierte `version.h`
+  vermischen → bei jedem Wechsel müsste komplett neu gebaut werden, und beim abwechselnden
+  Flashen an einem USB-Port bestünde die Gefahr, die falsche Firmware zu flashen.
+- **Zwei Unterprojekte im selben Repo** sind die sauberste Lösung: getrennte `build/`,
+  getrennte `sdkconfig`, getrennte Flash-Befehle, gemeinsamer Code in `components/`.
+
+**Netzwerk-Topologie (CYD als Anzeige):**
+- Der ESP32-CAM eröffnet den SoftAP `Cam-AP` (offen, IP `10.1.1.1`, max. **1** Client).
+- Der CYD verbindet sich als WiFi-Station mit `Cam-AP` und holt JPEG-Frames von
+  `http://10.1.1.1:80/capture`.
+- **Hinweis:** Durch `max_connection = 1` am CAM ist immer nur **ein** Gerät gleichzeitig
+  verbunden (entweder das iPhone ODER der CYD). iPhone und CYD gleichzeitig wären erst
+  möglich, wenn am CAM die Client-Anzahl erhöht würde.
+- **Qualität:** Da der klassische CYD kein PSRAM hat, wird mit Skalierung 1:4 dekodiert
+  (160×120) und beim Anzeigen 2× hochskaliert + 90° rotiert (füllt das 240×320-Display).
+  Mit einem PSRAM-CYD ließe sich 1:2 (320×240) nativer darstellen.
 
 ## Konfiguration
 
@@ -267,3 +310,9 @@ Alle wichtigen Parameter in `include/config.h`:
 ## Versionierung
 
 `MAJOR.MINOR.BUILD` in `include/config.h` (`APP_VERSION_MAJOR`, `APP_VERSION_MINOR`).
+
+Der **Build-Zähler ist global** für das gesamte Repo (`.build_number` im Repo-Root):
+Beide Projekte (`esp32cam/` und `cyd/`) teilen sich die Nummernfolge `v0.1.xx`, damit die
+Versionsnummer über alle Geräte eindeutig bleibt. `tools/increment_build.py` wird pro
+Projekt mit `--project-dir <projekt>` aufgerufen und schreibt die Version in das jeweilige
+`include/version.h`.

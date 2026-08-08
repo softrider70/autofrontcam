@@ -1,7 +1,10 @@
-# ESP-IDF Build-Ausgaben
+# ESP-IDF Build-Ausgaben (jedes Projekt hat sein eigenes build/)
 build/
+**/build/
 sdkconfig
 sdkconfig.old
+**/sdkconfig
+**/sdkconfig.old
 *.o
 *.elf
 *.bin
@@ -9,9 +12,10 @@ sdkconfig.old
 
 # Komponenten aus der Component Registry (werden aus idf_component.yml generiert)
 managed_components/
+**/dependencies.lock
 
 # Generierte Versions-/Build-Dateien (werden bei jedem Build neu erzeugt)
-include/version.h
+**/include/version.h
 .build_number
 .last_version
 

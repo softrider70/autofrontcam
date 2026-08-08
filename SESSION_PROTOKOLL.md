@@ -168,3 +168,50 @@ geht der ESP in den bestmöglichen Sleep (nur Messpin aktiv), bei Spannungsansti
   (wird sonst nicht aus defaults neu erzeugt). Danach wiederholte **Windows-Dateilocks**
   (`GetLastError()=32`, Windows Defender Echtzeitscanner) – Lösung: Build in Schleife
   wiederholen (`do { ninja } while ($LASTEXITCODE -ne 0)`), jeder Versuch macht Fortschritt.
+
+---
+
+## Zusatz (gleiche Session) — CYD-Variante: Repo-Umbau auf Zwei-Projekt-Struktur
+
+### Entscheidung: Zwei Unterprojekte statt Branches
+- **Ziel:** Zweite Firmware-Variante für den **CYD** (Cheap Yellow Display, ESP32-2432S028R)
+  als Display-Client (zeigt das Kamerabild vom ESP32-CAM, Touch-Steuerung).
+- **Entschieden:** **Ein Repo, zwei eigenständige ESP-IDF-Projekte** (`esp32cam/` + `cyd/`),
+  **keine Branches** (Branches mischen sdkconfig/build/version.h → jedes Umschalten =
+  Komplett-Neubau + Verwechslungsgefahr beim abwechselnden Flashen am selben USB-Port).
+- **Neue Struktur:**
+  - `esp32cam/` – bisheriges Projekt verschoben (Kamera, OTA, PSRAM). Build OK, v0.1.77.
+  - `cyd/` – neues Display-Client-Projekt. Build OK, v0.1.81.
+  - `components/nvs_config/` – gemeinsame NVS-Komponente (beide Projekte).
+  - `tools/increment_build.py` – jetzt mit `--project-dir`; Build-Zähler bleibt **global**
+    (Repo-Root `.build_number`) → gemeinsame v0.1.xx-Nummerierung über alle Geräte.
+
+### CYD-Hardware (klassisch ESP32-2432S028R, WROOM-32)
+- **Display:** ILI9341 240x320 SPI (SCK18/MOSI23/CS5/DC2/RST4/BL21 active-high).
+- **Touch:** XPT2046 (CS14, gleicher SPI-Bus).
+- **Kein PSRAM** → JPEG-Dekodierung mit Skalierung 1:4 (160x120, 38 KB) + 2x-Upscaling
+  + 90°-Rotation beim Blit → füllt 240x320 komplett.
+
+### Wichtige Hürden / Erkenntnisse
+- **ESP-IDF 6.x hat KEINEN ILI9341-Treiber mehr** in `esp_lcd` (nur ST7789/SSD1306) →
+  eigener Minimal-Treiber über `esp_lcd_panel_io_spi` (`tx_param`/`tx_color`), inkl.
+  Standard-Init-Sequenz. Farbdaten RGB565 **Big-Endian** (`be16()`); `esp_jpeg` mit
+  `swap_color_bytes=1` liefert konsistent Big-Endian.
+- **5x7-Font ist spaltenorientiert** (5 Bytes = 5 Spalten, Bits = Zeilen) – mein erster
+  Code las zeilenorientiert → Out-of-Bounds (GCC `-Werror=aggressive-loop-optimizations`).
+  Korrekt: `(font5x7[ch][c] >> ry) & 1`.
+- **`nvs_config_get_str(key, NULL)` crasht** (macht `strdup(NULL)`) → immer `""` als
+  Default übergeben + mit `strlen` absichern.
+- **`${Python3_EXECUTABLE}` ist im Configure leer** (nur `_Python3_EXECUTABLE`/`PYTHON`
+  im Cache) → auf **`${PYTHON}`** umgestellt.
+- **Erstes Configure scheitert**, wenn `include/version.h` noch nicht existiert
+  (`target_sources` verlangt die Datei) → einmal `increment_build.py --project-dir cyd`
+  manuell ausführen, dann `idf.py build`.
+- **Versions-Sync** (version.h vs. Binary) benötigt wie beim CAM ggf. einen zweiten Build.
+
+### Nächster Schritt (Nutzer)
+- CYD an USB stecken, flashen: `cd cyd; idf.py -p COM4 flash`.
+- ESP32-CAM + CYD einschalten; CYD sollte sich mit `Cam-AP` verbinden und das Bild zeigen.
+- **Hardware-Validierung nötig:** Display-Init (Farben ggf. MADCTL 0x08↔0x00), Backlight
+  (active-high), Touch-Kalibrierung (TOUCH_MIN/MAX_X/Y, Z1/Z2-Schwellen), Rotation
+  (CW/CCW).

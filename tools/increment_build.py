@@ -11,19 +11,19 @@ import re
 import time
 from pathlib import Path
 
-# PROJECT_ROOT is one level up from tools/
+# PROJECT_ROOT is one level up from tools/  -> Repo-Root
+# Der Build-Zaehler (.build_number/.last_version) ist GEMEINSAM fuer alle Projekte
+# im Repo (esp32cam/ und cyd/ teilen sich die globale v0.1.xx-Nummerierung).
+# Die include/-Pfade werden pro Projekt ueber --project-dir gesetzt.
 PROJECT_ROOT = Path(__file__).parent.parent
 BUILD_NUMBER_FILE = PROJECT_ROOT / ".build_number"
 LAST_VERSION_FILE = PROJECT_ROOT / ".last_version"
-VERSION_TEMPLATE = PROJECT_ROOT / "include" / "version.h.in"
-VERSION_HEADER = PROJECT_ROOT / "include" / "version.h"
-CONFIG_HEADER = PROJECT_ROOT / "include" / "config.h"
 
-def read_version_from_config():
+def read_version_from_config(config_header):
     """Extract APP_VERSION_MAJOR and APP_VERSION_MINOR from config.h"""
     major, minor = None, None
     
-    with open(CONFIG_HEADER, 'r') as f:
+    with open(config_header, 'r') as f:
         content = f.read()
     
     major_match = re.search(r'#define\s+APP_VERSION_MAJOR\s+(\d+)', content)
@@ -81,11 +81,11 @@ def increment_build_number(major, minor):
     
     return build_num, was_reset
 
-def generate_version_header(major, minor, build_num):
+def generate_version_header(major, minor, build_num, version_template, version_header):
     """Generate version.h from version.h.in template"""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     
-    with open(VERSION_TEMPLATE, 'r') as f:
+    with open(version_template, 'r') as f:
         content = f.read()
     
     # Replace template variables
@@ -98,15 +98,25 @@ def generate_version_header(major, minor, build_num):
     version_string = f"v{major}.{minor}.{build_num}"
     content = content.replace("@VERSION_STRING@", version_string)
     
-    with open(VERSION_HEADER, 'w') as f:
+    with open(version_header, 'w') as f:
         f.write(content)
     
     return version_string
 
 if __name__ == "__main__":
     try:
+        import argparse
+        parser = argparse.ArgumentParser(description="Build-Nummer erhoehen und version.h generieren")
+        parser.add_argument("--project-dir", default=str(PROJECT_ROOT),
+                            help="Projektverzeichnis mit include/ (config.h, version.h.in)")
+        args = parser.parse_args()
+        project = Path(args.project_dir).resolve()
+        config_header = project / "include" / "config.h"
+        version_template = project / "include" / "version.h.in"
+        version_header = project / "include" / "version.h"
+
         # Read MAJOR and MINOR from config.h
-        major, minor = read_version_from_config()
+        major, minor = read_version_from_config(config_header)
         if major is None or minor is None:
             raise ValueError("Could not find APP_VERSION_MAJOR or APP_VERSION_MINOR in config.h")
         
@@ -114,7 +124,7 @@ if __name__ == "__main__":
         build_num, was_reset = increment_build_number(major, minor)
         
         # Generate version.h
-        version_string = generate_version_header(major, minor, build_num)
+        version_string = generate_version_header(major, minor, build_num, version_template, version_header)
         
         # Log message
         if was_reset:

@@ -2,7 +2,6 @@ idf_component_register(
     SRCS
         main.c
         camera.c
-        nvs_config.c
         heap_monitor.c
         stack_monitor.c
         wifi.c
@@ -16,6 +15,7 @@ idf_component_register(
     EMBED_FILES
         index.html
     REQUIRES
+        nvs_config
         nvs_flash
         esp_timer
         driver
@@ -31,8 +31,9 @@ idf_component_register(
 )
 
 # Build-Nummer erhoehen + include/version.h generieren (VOR der main-Kompilierung)
+# increment_build.py liegt im Repo-Root unter tools/, --project-dir zeigt auf dieses Projekt.
 add_custom_target(autofrontcam_version ALL
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/increment_build.py
+    COMMAND ${PYTHON} ${CMAKE_SOURCE_DIR}/../tools/increment_build.py --project-dir ${CMAKE_SOURCE_DIR}
     COMMENT "Erhoehe Build-Nummer und generiere version.h"
     VERBATIM
 )

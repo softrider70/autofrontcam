@@ -42,7 +42,7 @@ static const char *TAG = "AUTOCAM";
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
-    /* Eingebettete Web-UI (components/main/index.html) */
+    /* Eingebettete Web-UI (esp32cam/main/index.html) */
     extern const uint8_t index_html_start[] asm("_binary_index_html_start");
     extern const uint8_t index_html_end[] asm("_binary_index_html_end");
 
