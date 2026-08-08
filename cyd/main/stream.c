@@ -77,7 +77,9 @@ static void wifi_sta_init(void)
 
     wifi_config_t wcfg = {
         .sta = {
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            /* Schwellwert OPEN -> erlaubt Verbindungen zu offenen APs (Cam-AP)
+             * UND zu gesicherten Netzen (WPA/WPA2). */
+            .threshold.authmode = WIFI_AUTH_OPEN,
         },
     };
     strncpy((char *)wcfg.sta.ssid, ssid, sizeof(wcfg.sta.ssid) - 1);
