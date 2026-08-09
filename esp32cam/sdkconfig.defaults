@@ -36,6 +36,14 @@ CONFIG_ESP_TASK_WDT_INIT=n
 CONFIG_ESP_TASK_WDT=n
 CONFIG_ESP_INT_WDT=y
 
+# Brownout-Detektor AUS: Nach einem Stromausfall kollabiert die Versorgung beim
+# Wiederanlauf kurzzeitig. Der aktive Brownout-Detektor (BOD) resettet den Chip dann
+# immer wieder -> Boot-Reset-Loop (die CAM blinkt nach dem Wiederanlauf nicht 3x rot
+# und der Stream kommt nicht wieder). Mit BOD=AUS bootet die CAM auch bei leicht
+# instabiler Spannung sauber durch.
+CONFIG_ESP_BROWNOUT_DET=n
+CONFIG_ESP32_BROWNOUT_DET=n
+
 # FreeRTOS
 CONFIG_FREERTOS_HZ=100
 CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=1536

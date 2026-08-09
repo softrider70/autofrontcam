@@ -88,7 +88,10 @@ extern "C" {
 #define CAM_API_PATH        "/api/config"
 
 #define STREAM_POLL_MS      50          /* ~20 fps Polling */
-#define STREAM_FETCH_TIMEOUT_MS 2000
+#define STREAM_FETCH_TIMEOUT_MS 1000    /* 1s: schnellerer Abruch bei CAM-Ausfall
+                                           (2s liess die Erkennung ~6s dauern) */
+#define STREAM_FAIL_THRESHOLD 3         /* Fetch-Fehler bis HTTP-Client-Neuaufbau +
+                                           hartes WiFi-Reconnect (Verbindungs-Watchdog) */
 
 /* JPEG-Dekodierung: wird adaptiv an die tatsaechliche Kameragroesse angepasst
  * (kein PSRAM). Maximaler Dekodier-Puffer: SVGA 800x600 bei 1:4 = 200x150x2 = 60000 B. */

@@ -188,6 +188,7 @@ static void stream_task(void *arg)
     uint32_t frame_count = 0;
     bool was_connected = false;
     TickType_t last_overlay = 0;
+    int consec_fail = 0;   /* aufeinanderfolgende Fetch-Fehler */
 
     while (1) {
         if (s_connected && client) {
@@ -203,6 +204,33 @@ static void stream_task(void *arg)
             } else if (fetch_ms > 150) {
                 ESP_LOGW(TAG, "Fetch langsam: %d ms, %d B", fetch_ms, buf.len);
             }
+
+            /* AKTIVER VERBINDUNGS-WATCHDOG: Wenn mehrere Fetch-Versuche hintereinander
+             * scheitern (CAM weg/stromlos), haengt der sonst korrupte esp_http_client
+             * fest und der WiFi-Stack bemerkt den AP-Verlust erst nach bcn_timeout
+             * (~6s). Fix: HTTP-Client neu erstellen UND WiFi hart neu verbinden
+             * (disconnect+connect) - das erkennt den Ausfall schnell und setzt den
+             * Client-Zustand zurueck, damit der Reconnect nach CAM-Wiederkunft
+             * zuverlaessig klappt. */
+            if (err != ESP_OK) {
+                consec_fail++;
+                ESP_LOGW(TAG, "Verbindungs-Watchdog: %d/%d Fehler", consec_fail, STREAM_FAIL_THRESHOLD);
+                if (consec_fail >= STREAM_FAIL_THRESHOLD) {
+                    ESP_LOGW(TAG, "CAM nicht erreichbar - HTTP-Client neu + WiFi-Reconnect");
+                    ui_set_status("CAM weg - Reconnect");
+                    if (client) { esp_http_client_cleanup(client); client = NULL; }
+                    client = esp_http_client_init(&hcfg);
+                    if (!client) { ESP_LOGE(TAG, "HTTP-Client-Neuaufbau fehlgeschlagen"); }
+                    /* WiFi hart neu verbinden (erklaert dem Stack den AP-Verlust) */
+                    esp_wifi_disconnect();
+                    vTaskDelay(pdMS_TO_TICKS(300));
+                    esp_wifi_connect();
+                    consec_fail = 0;
+                }
+            } else {
+                consec_fail = 0;
+            }
+
             if (err == ESP_OK && buf.len > 8) {
                 esp_jpeg_image_cfg_t jcfg = {
                     .indata = jpeg_buf,
