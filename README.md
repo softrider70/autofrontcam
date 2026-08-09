@@ -383,6 +383,25 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
 - Damit arbeitet die CAM **eigenständig** (ohne manuellen Reset) und hat nach einem
   Selbstheilungs-Vorgang sofort wieder einen Client.
 
+**Zusätzliche Härtung für den Anlauf nach Stromausfall:**
+- **Brownout-Detektor AUS** (`CONFIG_ESP_BROWNOUT_DET=n`): nach einem Stromausfall
+  kollabiert die Versorgung beim Wiederanlauf kurzzeitig; der aktive BOD resettete den Chip
+  dann immer wieder → Boot-Reset-Loop (CAM „blinkte nicht 3×“).
+- **Bootloader-WDT auf 30 s** (`CONFIG_BOOTLOADER_WDT_TIME_MS=30000`): ein langsamer
+  Anlauf wird nicht mehr nach 9 s abgebrochen/neu gestartet.
+- **Boot-Blinker (3×) ganz am Anfang von `app_main`** (vor allen Init-Schritten): sofortiges
+  Diagnose-Signal — blinkt die CAM 3×, hat sie den Boot begonnen.
+- **CYD-Verbindungs-Watchdog** (in `cyd/main/stream.c`): nach 3 Fetch-Fehlern HTTP-Client
+  neu erstellen + hartes WiFi-Reconnect (disconnect+connect) → sobald die CAM wieder da ist,
+  verbindet sich der CYD **automatisch wieder, ohne CAM-Reset** (verifiziert).
+
+> **Verbleibender Hardware-Punkt (kein Software-Thema):** Startet die CAM nach einem
+> Stromausfall **sofort** wieder (Kondensatoren noch teilgeladen), bootet sie beim 1./2.
+> Anlauf manchmal nicht sauber durch (kein 3×-Blinken → kein Bild). Je länger sie stromlos
+> bleibt (vollständige Entladung, z.B. 2–3 s), desto zuverlässiger der Anlauf. Abhilfe am
+> Board: **Puffer-Elko (470–1000 µF) parallel zur Versorgung** + stabile 5V-Quelle
+> (knapper AMS1117-3,3V-Regler am ESP32-CAM).
+
 ## Konfiguration
 
 Alle wichtigen Parameter in `include/config.h` (jeweils pro Projekt):
@@ -464,6 +483,8 @@ Die wichtigsten, am realen Board verifizierten Erkenntnisse (Ausführliches sieh
 | **Menü-Buttons reagieren nicht / UI „friert“ ein** | Tap-Erkennung per **Koordinatensprung** (>40px) + Entprellung verschluckte Button-Tipps (Finger glitt vom Video zum Button) | **Flanken-Erkennung** (Tap = neues Aufsetzen), 250ms Entprellung |
 | **Status „WLAN getrennt“ bleibt stehen** | Status wurde bei Verbindungsverlust gesetzt, aber bei Wiederverbindung nie zurückgesetzt | Status bei erneuter Verbindung auf „Verbunden“ zurücksetzen |
 | **fps=3 trotz schnellem Netzwerk** (Fetch <150ms) | **JPEG-Dekodierung ~90–100ms** (esp_jpeg dekodiert immer volle Auflösung, Skalierung hilft nicht) **+ Anzeige ~170–180ms** (`display_blit_decoded` setzte pro Zeile ein Fenster) | **Einmaliges Fenster-Setup** fürs ganze Bild (`lcd_set_window` aus der Zeilenschleife herausgezogen) → Anzeige ~5× schneller |
+| **Verbindung nach CAM-Ausfall kommt nicht wieder** (CAM-Reset nötig) | korrupter `esp_http_client`-Zustand + langes `bcn_timeout` (~6s Erkennung) | **CYD-Verbindungs-Watchdog:** nach 3 Fetch-Fehlern HTTP-Client neu + hartes WiFi-Reconnect, Fetch-Timeout 1s → automatische Wiederverbindung ohne CAM-Reset (verifiziert) |
+| **CAM bootet nach Stromausfall nicht sauber** (kein 3×-Blinken, „erst beim 3. Anlauf“) | **Brownout-Reset-Loop** (BOD aktiv) + Bootloader-WDT 9s + teilgeladene Kondensatoren | **BOD AUS**, Bootloader-WDT 30s, Blinker an den App-Start; verbleibender Hänger ist **Hardware-Entladung** (länger stromlos lassen / Puffer-Elko 470–1000µF) |
 
 ## Build-Erkenntnisse & Stolpersteine (aus dem Session-Protokoll)
 
