@@ -250,6 +250,12 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
         return;
     }
 
+    /* EINMAL das Adressfenster fuer das GESAMTE Bild setzen: das ILI9341
+     * inkrementiert die Zielzeile nach jedem RAMWR-Datenblock automatisch.
+     * Vorher wurde pro Zeile ein lcd_set_window() (je 3 SPI-Kommandos) gesendet
+     * -> 219 Fenster-Setups pro Bild = 170-180 ms Anzeigezeit (grosser
+     * fps-Engpass). Jetzt nur 1 Setup -> Anzeige ~5x schneller. */
+    lcd_set_window(ox, oy, ox + dw - 1, oy + dh - 1);
     for (int dy = 0; dy < dh; dy++) {
         int ry = (dy * ih) / dh;
         if (ry < 0) ry = 0;
@@ -271,7 +277,6 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
             }
             row[dx] = src[sy * src_w + sx];
         }
-        lcd_set_window(ox, oy + dy, ox + dw - 1, oy + dy);
         lcd_draw_bitmap(row, (size_t)dw * 2);
     }
     lcd_flush();

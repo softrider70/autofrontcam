@@ -191,7 +191,6 @@ static void ui_handle_menu_tap(int x, int y)
 /* ------------------------------------------------------------------ */
 static void ui_task(void *arg)
 {
-    int px = -1, py = -1;
     TickType_t last_tap = 0;
     bool was_pressed = false;
 
@@ -199,17 +198,20 @@ static void ui_task(void *arg)
         int x, y;
         if (touch_get_point(&x, &y)) {
             /* Touch-Diagnose: Koordinaten im STATUS (am Display ablesbar) UND im
-             * Log, damit der bewusste Touch-Test zuverlaessig ausgewertet werden
-             * kann (das Log wird sonst von HTTP-Fehlern ueberflutet). */
+             * Log, damit die Touch-Position ueberpruefbar bleibt. */
             static TickType_t last_log = 0;
             if ((xTaskGetTickCount() - last_log) >= pdMS_TO_TICKS(300)) {
                 ui_set_status("T:%d,%d", x, y);
                 ESP_LOGI("ui", "Touch: x=%d y=%d", x, y);
                 last_log = xTaskGetTickCount();
             }
-            /* Tipp erkennen: groesser Koordinatensprung + Entprellzeit */
-            if ((abs(x - px) > 40 || abs(y - py) > 40) &&
-                (xTaskGetTickCount() - last_tap) > pdMS_TO_TICKS(300)) {
+            /* Tipp = NEUES AUFSETZEN (Flanke), nicht Bewegung.
+             * Die alte Sprung-Erkennung (abs(x-px)>40) verschluckte Button-Tipps,
+             * wenn der Finger vom Video zum Button glitt: der Sprung fiel in die
+             * 300ms-Entprellzeit ODER es gab nach dem Aufsetzen keinen weiteren
+             * Sprung -> Buttons reagierten nicht und die UI schien einzufrieren. */
+            if (!was_pressed &&
+                (xTaskGetTickCount() - last_tap) > pdMS_TO_TICKS(250)) {
                 last_tap = xTaskGetTickCount();
                 if (s_diag_mode) {
                     /* Diagnose-Test beenden -> Menue oeffnen */
@@ -227,10 +229,8 @@ static void ui_task(void *arg)
                 }
             }
             was_pressed = true;
-            px = x; py = y;
         } else {
             was_pressed = false;
-            px = -1; py = -1;
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }

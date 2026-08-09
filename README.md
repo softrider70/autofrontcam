@@ -1,5 +1,12 @@
 # Autofrontcam — Rechte-Seiten-Kamera für den Škoda (ESP32-CAM + OV2640 + CYD-Display)
 
+> ### 🚀 Dieses Projekt wurde zu **100 % per Vipecoding mit DeepSeek V4** erstellt!
+>
+> Sämtliche Planung, Hardware-Analyse, Firmware-Entwicklung, Debugging und Dokumentation
+> wurden **vollständig automatisiert durch Vipecoding (DeepSeek V4)** durchgeführt — vom
+> ersten `esptool`-Chip-Readout bis zum finalen Flash beider Geräte. Es wurde **kein Code
+> von Hand** geschrieben oder geändert. (ESP-IDF 6.1-dev, ESP32, C/C++, FreeRTOS.)
+
 Eine **WiFi-Seitenkamera** für ein Škoda-Fahrzeug auf Basis des **AI-Thinker ESP32-CAM**
 (ESP32-D0WD-V3 + OV2640). Die Kamera liefert **Einzelbilder (JPEG, `/capture`)** über ein
 eigenes WLAN (Access Point) an einen **Display-Client im Fahrzeuginnenraum** und unterstützt
@@ -197,7 +204,9 @@ Web-UI: OTA-Button → Datei auswählen → Upload → Neustart
 
 | Komponente | Spezifikation |
 |---|---|
-| **Chip** | ESP32-D0WD-V3 (Dual-Core Xtensa LX6, 240MHz) |
+| **Chip** | ESP32-D0WD-V3 (Dual-Core Xtensa LX6, 240MHz), Rev. v3.0 |
+| **Crystal** | 40MHz |
+| **MAC** | `B0:A7:32:DD:B7:F4` (AP-IF: `...:F5`) |
 | **Kamera** | OV2640 (SCCB/I2C, DVP parallel) |
 | **Flash** | 4MB (aus Chip ausgelesen) |
 | **PSRAM** | 4MB (SPI-RAM, wichtig für JPEG-Puffer) |
@@ -205,6 +214,9 @@ Web-UI: OTA-Button → Datei auswählen → Upload → Neustart
 | **Flash-LED** | GPIO4 |
 | **Port** | COM4 (USB-Serial CH340) |
 | **Spannungsmessung** | ADC an einem frei konfigurierbaren GPIO (Spannungsteiler 12V→3,3V) |
+
+*(Chip-Daten per `esptool` von COM4 ausgelesen — Grundlage für alle Anpassungen:
+klassischer ESP32, **nicht** ESP32-S3!)*
 
 ## Schnellstart
 
@@ -316,7 +328,7 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
 | **Touch-Pins** | SCLK=25, MOSI=32, MISO=39, CS=33, IRQ=36 (2,5 MHz, kein DMA). |
 | **Druckschwelle** | **300** (Rauschen 0–50, echter Stiftdruck ~2000). Verhindert Geister-Touches ohne Berührung. |
 | **Touch-Kalibrierung** | Basis-Umrechnung `dx = x_raw*320/4096`, `dy = y_raw*240/4096` ist **korrekt** (4 Eckpunkte + Mitte verifiziert: keine Achsen-Vertauschung, keine Invertierung). Die Kalibrierung wurde **mit dem Fingernagel** erfolgreich durchgeführt (Druck deutlich über der 300er-Schwelle); weiche Fingerkuppe liefert weniger Druck und kann unzuverlässig sein. |
-| **Kein PSRAM** | Klassischer CYD (ESP32-2432S028R) hat **kein PSRAM** → JPEG-Dekodierung läuft adaptiv (1:2 solange Puffer reicht, sonst 1:4), `MAX_DECODED_BUF 60000`. |
+| **Kein PSRAM** | Klassischer CYD (ESP32-2432S028R) hat **kein PSRAM** → JPEG-Dekodierung in Software; Skalierung **1:2 bei QVGA (320×240), sonst 1:4** (esp_jpeg dekodiert intern aber immer die volle Auflösung), `MAX_DECODED_BUF 60000`. |
 | **Anzeige-Rotation** | Kamerabild ist quer, Display quer (320×240) → `DISPLAY_ROTATION 0`. ROT-Button im Menü togglet CW/CCW. |
 
 ### CYD — Bedienung
@@ -428,6 +440,10 @@ Alle wichtigen Parameter in `include/config.h` (jeweils pro Projekt):
 | Panel-Geometrie-Diagnose (DIAG) | ✅ implementiert |
 | Overlay/OSD unabhängig von Frames (kein Einfrieren) | ✅ implementiert |
 | HTTP-Log-Spam-Reduktion (CAM nicht erreichbar) | ✅ implementiert |
+| WiFi-Power-Save deaktiviert (keine periodischen Disconnects) | ✅ implementiert |
+| Tap-Erkennung per Flanke (Menü-Buttons zuverlässig) | ✅ implementiert |
+| Status-Reset bei Wiederverbindung (kein fälschliches „WLAN getrennt“) | ✅ implementiert |
+| Anzeige-Beschleunigung (einmaliges Fenster-Setup) | ✅ implementiert |
 
 ## Erkenntnisse & gelöste Probleme (Debug-Log)
 
@@ -446,6 +462,24 @@ Die wichtigsten, am realen Board verifizierten Erkenntnisse (Ausführliches sieh
 | **OSD/Menü friert ein** bei ausbleibenden Frames | Overlay hing am Frame-Fetch | **Overlay-Timer alle 500 ms unabhängig von Frames** |
 | **`Connection reset by peer`/fps-Einbruch** am CYD | CAM-httpd unterstützt kein Keep-Alive | **kein Keep-Alive**, Verbindung pro Frame neu |
 | **CAM nimmt keine Verbindungen an** (fps 3, `select() timeout`) | TIME_WAIT-PCB-Erschöpfung (nur 16 TCP-PCBs, MSL 60s) bei Verbindungs-pro-Frame | **LWIP härten** (48 PCBs, MSL 2s) + **Self-Healing-Watchdog** (Server/WiFi/Reset) |
+| **„WLAN getrennt“ trotz Stream + fps 3** (periodischer Abbruch alle ~2,4s) | **WiFi-Power-Save** am CYD (Modem-Sleep) — der Cam-AP hat ein langes Beacon-Intervall (102,4ms), der CYD gilt im Power-Save-Zyklus als inaktiv | **`esp_wifi_set_ps(WIFI_PS_NONE)`** am CYD → Verbindung stabil, keine Abbrüche mehr |
+| **Menü-Buttons reagieren nicht / UI „friert“ ein** | Tap-Erkennung per **Koordinatensprung** (>40px) + Entprellung verschluckte Button-Tipps (Finger glitt vom Video zum Button) | **Flanken-Erkennung** (Tap = neues Aufsetzen), 250ms Entprellung |
+| **Status „WLAN getrennt“ bleibt stehen** | Status wurde bei Verbindungsverlust gesetzt, aber bei Wiederverbindung nie zurückgesetzt | Status bei erneuter Verbindung auf „Verbunden“ zurücksetzen |
+| **fps=3 trotz schnellem Netzwerk** (Fetch <150ms) | **JPEG-Dekodierung ~90–100ms** (esp_jpeg dekodiert immer volle Auflösung, Skalierung hilft nicht) **+ Anzeige ~170–180ms** (`display_blit_decoded` setzte pro Zeile ein Fenster) | **Einmaliges Fenster-Setup** fürs ganze Bild (`lcd_set_window` aus der Zeilenschleife herausgezogen) → Anzeige ~5× schneller |
+
+## Build-Erkenntnisse & Stolpersteine (aus dem Session-Protokoll)
+
+| Stolperstein | Ursache | Lösung |
+|---|---|---|
+| `esp_hal_clock` fehlt | esp32-camera 2.1.7 verlangt es ab IDF ≥ 6.0, die verwendete IDF v6.1-dev hat es nicht | **Lokale Komponente** `components/esp_hal_clock` aus IDF v6.0 übernommen |
+| IRAM-Überlauf (~26KB) beim Linken | `-O0` aus LoRa-Vorlage erzeugt riesige IRAM-Segmente | **`-Os`** (`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`) |
+| `-Werror`-Format-Warnungen | zu kleine Puffer für HTML/Stream-Header | `body[2048]`, `part_hdr[96]` |
+| ESP-IDF 6.x hat **keinen ILI9341-Treiber** in `esp_lcd` | nur ST7789/SSD1306 vorhanden | Eigener Minimal-Treiber (roher SPI, Standard-Init, RGB565 **Big-Endian**) |
+| **5x7-Font** zeilenorientiert gelesen → Out-of-Bounds | Font ist **spaltenorientiert** (5 Bytes = 5 Spalten, Bits = Zeilen) | `(font5x7[ch][c] >> ry) & 1` |
+| `nvs_config_get_str(key, NULL)` crasht | `strdup(NULL)` | Immer `""` als Default übergeben + `strlen`-Check |
+| `${Python3_EXECUTABLE}` leer beim Configure | Variable heißt im Cache `_Python3_EXECUTABLE`/`PYTHON` | Auf **`${PYTHON}`** umstellen |
+| Erstes Configure scheitert (kein `version.h`) | `target_sources` verlangt die Datei | Einmal `increment_build.py --project-dir <p>` manuell ausführen |
+| Windows-Dateilocks beim Build (`GetLastError()=32`) | Windows Defender Echtzeitscanner | Build in Schleife wiederholen, jeder Versuch macht Fortschritt |
 
 ## Abhängigkeiten
 

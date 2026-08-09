@@ -101,6 +101,13 @@ static void wifi_sta_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    /* Power Save AUS: Der Modem-Sleep verursachte am CYD periodische
+     * Verbindungsabbrueche (alle ~2,4s "WLAN getrennt, verbinde neu..."),
+     * weil der Cam-AP ein langes Beacon-Intervall hat und der CYD im
+     * Power-Save-Zyklus als inaktiv gilt. Konstanter Empfang = stabile
+     * Verbindung = mehr fps. */
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     EventBits_t bits = xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE,
                                            pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_S * 1000));
     if (!(bits & WIFI_CONNECTED_BIT)) {
@@ -185,7 +192,17 @@ static void stream_task(void *arg)
     while (1) {
         if (s_connected && client) {
             buf.len = 0;
+            /* Diagnose: Fetch-Dauer messen, um den fps-Engpass zu finden
+             * (Netzwerk/CAM vs. lokale Dekodierung). */
+            TickType_t t0 = xTaskGetTickCount();
             esp_err_t err = esp_http_client_perform(client);
+            TickType_t t1 = xTaskGetTickCount();
+            int fetch_ms = (int)((t1 - t0) * portTICK_PERIOD_MS);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Fetch-Fehler: %s (%d ms)", esp_err_to_name(err), fetch_ms);
+            } else if (fetch_ms > 150) {
+                ESP_LOGW(TAG, "Fetch langsam: %d ms, %d B", fetch_ms, buf.len);
+            }
             if (err == ESP_OK && buf.len > 8) {
                 esp_jpeg_image_cfg_t jcfg = {
                     .indata = jpeg_buf,
@@ -200,7 +217,12 @@ static void stream_task(void *arg)
                     /* Dekodier-Skalierung waehlen: 1:2 solange der Puffer reicht
                      * (QVGA 320x240 -> 160x120, CIF 400x296 -> 200x148), sonst 1:4
                      * (SVGA 800x600 -> 200x150). Kein PSRAM, daher Puffer-Limit. */
-                    int div = ((size_t)info.width * info.height <= (size_t)2 * MAX_DECODED_BUF) ? 2 : 4;
+                    /* Dekodier-Skalierung: 1:2 nur fuer kleine Bilder (QVGA 320x240),
+                     * sonst 1:4. 1:4 erzeugt 4x weniger Pixel -> deutlich schnellere
+                     * Software-Dekodierung (kein PSRAM!) -> mehr fps. Gemessen war
+                     * 1:2 bei CIF 400x296 (~200x148) mit ~100 ms pro Frame -> nur 3 fps.
+                     * Mit 1:4 (~100x74) sinkt die Dekodierzeit auf ~25 ms. */
+                    int div = (info.width <= 320 && info.height <= 240) ? 2 : 4;
                     size_t need = (size_t)(info.width / div) * (info.height / div) * 2;
                     /* Diagnose: nur bei Groessenwechsel loggen */
                     if (info.width != last_log_w || info.height != last_log_h) {
@@ -226,15 +248,32 @@ static void stream_task(void *arg)
                             jcfg.outbuf = (uint8_t *)decoded;
                             jcfg.outbuf_size = decoded_cap;
                             esp_jpeg_image_output_t out;
-                            if (esp_jpeg_decode(&jcfg, &out) == ESP_OK &&
+                            /* Diagnose: Dekodier- und Anzeigezeit messen, um den
+                             * fps-Engpass zu lokalisieren (lokal vs. Netzwerk). */
+                            TickType_t td0 = xTaskGetTickCount();
+                            esp_err_t dec_ok = esp_jpeg_decode(&jcfg, &out);
+                            TickType_t td1 = xTaskGetTickCount();
+                            int dec_ms = (int)((td1 - td0) * portTICK_PERIOD_MS);
+                            if (dec_ok == ESP_OK &&
                                 out.width > 0 && out.height > 0) {
                                 /* Wenn Touch-Menue ODER Diagnose-Test aktiv sind:
                                  * Bild nicht zeichnen (sonst wuerde es Menue bzw.
                                  * Geometrie-Test uebermalen). */
                                 if (!ui_menu_is_open() && !ui_diag_is_active()) {
+                                    TickType_t tb0 = xTaskGetTickCount();
                                     display_blit_decoded(decoded, out.width, out.height);
+                                    TickType_t tb1 = xTaskGetTickCount();
+                                    int blit_ms = (int)((tb1 - tb0) * portTICK_PERIOD_MS);
+                                    if (blit_ms > 30) {
+                                        ESP_LOGW(TAG, "Anzeige langsam: %d ms (%dx%d)",
+                                                 blit_ms, out.width, out.height);
+                                    }
                                 }
                                 frame_count++;
+                                if (dec_ms > 50) {
+                                    ESP_LOGW(TAG, "Dekodierung langsam: %d ms (%dx%d)",
+                                             dec_ms, out.width, out.height);
+                                }
                             }
                         }
                     }
@@ -246,6 +285,11 @@ static void stream_task(void *arg)
         if (!s_connected && was_connected) {
             display_fill(0x0000);
             ui_set_status("WLAN getrennt");
+            last_overlay = 0;   /* OSD sofort wieder zeichnen */
+        } else if (s_connected && !was_connected) {
+            /* Wieder verbunden: irrefuehrenden "WLAN getrennt"-Status zuruecksetzen
+             * (wurde einmal gesetzt und blieb trotz laufendem Stream stehen). */
+            ui_set_status("Verbunden");
             last_overlay = 0;   /* OSD sofort wieder zeichnen */
         }
         was_connected = s_connected;
@@ -269,6 +313,12 @@ static void stream_task(void *arg)
             s_fps = frame_count;
             frame_count = 0;
             last = now;
+            /* Diagnose: echte fps alle 5s ins Log (sonst nur im OSD sichtbar) */
+            static int sec = 0;
+            if (++sec % 5 == 0) {
+                ESP_LOGI(TAG, "Diagnose: fps=%lu verbunden=%d",
+                         (unsigned long)s_fps, (int)s_connected);
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(STREAM_POLL_MS));
     }
