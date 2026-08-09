@@ -1,4 +1,4 @@
-# Autofrontcam — Rechte-Seiten-Kamera für den Škoda (ESP32-CAM + OV2640 + CYD-Display)
+# Autofrontcam — Seiten-Kamera für ein Fahrzeug (ESP32-CAM + OV2640 + CYD-Display)
 
 > ### 🚀 Dieses Projekt wurde zu **100 % per Vipecoding mit DeepSeek V4** erstellt!
 >
@@ -7,7 +7,7 @@
 > ersten `esptool`-Chip-Readout bis zum finalen Flash beider Geräte. Es wurde **kein Code
 > von Hand** geschrieben oder geändert. (ESP-IDF 6.1-dev, ESP32, C/C++, FreeRTOS.)
 
-Eine **WiFi-Seitenkamera** für ein Škoda-Fahrzeug auf Basis des **AI-Thinker ESP32-CAM**
+Eine **WiFi-Seitenkamera** für ein Fahrzeug auf Basis des **AI-Thinker ESP32-CAM**
 (ESP32-D0WD-V3 + OV2640). Die Kamera liefert **Einzelbilder (JPEG, `/capture`)** über ein
 eigenes WLAN (Access Point) an einen **Display-Client im Fahrzeuginnenraum** und unterstützt
 **OTA-Firmware-Updates** über einen eingebetteten Webserver.
@@ -27,9 +27,7 @@ Helligkeit/Rotation/Kalibrierung steuert.
 
 ## Anwendungsfall
 
-- **Montageort:** Rechte Frontseite des Škoda, vor dem Seitenspiegel, unten auf
-  Reifenhöhe am Stoßfänger.
-- **Zweck:** Sicht auf die **rechte Fahrzeugseite** — zur Überwachung beim Einparken,
+- **Zweck:** Sicht auf eine **Fahrzeugseite** — zur Überwachung beim Einparken,
   Rangieren und beim Beobachten des toten Winkels entlang der Fahrzeugflanke.
 - **Bedienung:** Der **CYD-Display-Client** im Innenraum verbindet sich mit dem Access Point
   und zeigt das Kamerabild dauerhaft an. (Alternativ war ursprünglich ein iPhone 6 per
