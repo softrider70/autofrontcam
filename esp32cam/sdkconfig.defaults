@@ -60,6 +60,11 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 # auf die letzte stabile Partition zurueck (PENDING_VERIFY + mark_app_valid)
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
+# Bootloader-WDT: Zeit grosszuegig, damit ein langsamer Anlauf nach Stromausfall
+# (instabile Versorgung, PSRAM-Init) nicht abgebrochen und neu gestartet wird
+# (sonst "kein 3x-Blinken, erst beim 3. Anlauf").
+CONFIG_BOOTLOADER_WDT_TIME_MS=30000
+
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL=4

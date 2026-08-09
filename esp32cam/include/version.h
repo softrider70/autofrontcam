@@ -5,6 +5,6 @@
 
 #define APP_VERSION_MAJOR      0
 #define APP_VERSION_MINOR      1
-#define BUILD_NUMBER           176
-#define BUILD_TIMESTAMP        "2026-08-09 21:34:16"
-#define APP_VERSION_STRING     "v0.1.176"
+#define BUILD_NUMBER           178
+#define BUILD_TIMESTAMP        "2026-08-09 21:47:11"
+#define APP_VERSION_STRING     "v0.1.178"

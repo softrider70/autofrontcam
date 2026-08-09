@@ -489,6 +489,23 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     nvs_config_init();
 
+    /* Status-LED sofort konfigurieren und Boot-Blinker (3x) GANZ AM ANFANG
+     * abspielen - als klares Diagnose-Signal, dass die CAM den Boot begonnen
+     * hat. Wenn die CAM nach einem Stromausfall NICHT 3x blinkt, haengt sie
+     * frueh im Boot (vorher lag der Blinker NACH dem Server-Start und gab
+     * ueber einen fruehen Boot-Haenger keine Auskunft). */
+    gpio_config_t led_conf = {
+        .pin_bit_mask = (1ULL << LED_GPIO) | (1ULL << LED_FLASH_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&led_conf);
+    gpio_set_level(LED_GPIO, LED_OFF);              /* Status-LED aus (active-low) */
+    gpio_set_level(LED_FLASH_GPIO, FLASH_LED_OFF);  /* Flash-LED aus (aktiv-high) */
+    led_boot_blink();
+
     /* Kalibrierungslinien aus NVS laden */
     lines_init();
 
@@ -500,18 +517,6 @@ void app_main(void)
 
     /* Early-Check: wenn "Geregelt" und Spannung zu niedrig -> Deep-Sleep */
     sleep_check_early();
-
-    /* Status-LED konfigurieren */
-    gpio_config_t led_conf = {
-        .pin_bit_mask = (1ULL << LED_GPIO) | (1ULL << LED_FLASH_GPIO),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
-    };
-    gpio_config(&led_conf);
-    gpio_set_level(LED_GPIO, LED_OFF);              /* Status-LED aus (active-low) */
-    gpio_set_level(LED_FLASH_GPIO, FLASH_LED_OFF);  /* Flash-LED aus (aktiv-high) */
 
     /* Monitore starten */
     stack_monitor_init();
@@ -546,9 +551,6 @@ void app_main(void)
      * den Server, dann WiFi/AP, zuletzt per Software-Reset (die CAM ist verbaut
      * und kann nicht manuell resettet werden). */
     conn_watchdog_start();
-
-    /* Kurzer Boot-Blinker (3x), danach LED aus */
-    led_boot_blink();
 
     /* Erste Spannungsmessung fuer den Log */
     float batt = voltage_read_batt();
