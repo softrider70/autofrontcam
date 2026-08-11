@@ -85,6 +85,36 @@ static void lcd_draw_bitmap(const void *data, size_t len)
     lcd_write(false, data, len);
 }
 
+/* Schnelle Rechteck-Fuellung: Fenster einmal setzen, dann alle Zeilen in
+ * grossen Bloecken senden (statt einer Transaktion pro Zeile). Die schwarzen
+ * contain-fit-Balken im Blit kosteten mit display_draw_filled_rect (1 Zeile
+ * pro Transfer) ~100 ms/Frame - hier sind es nur noch wenige grosse Transfers. */
+static void lcd_fill_rect_fast(int x, int y, int w, int h, uint16_t color)
+{
+    if (w <= 0 || h <= 0 || !s_spi) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (w <= 0 || h <= 0) return;
+    if (x + w > TFT_WIDTH)  w = TFT_WIDTH - x;
+    if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
+    if (w <= 0 || h <= 0) return;
+
+    const int rows = 16;
+    size_t npx = (size_t)w * rows;
+    uint16_t *buf = heap_caps_malloc(npx * 2, MALLOC_CAP_DMA);
+    if (!buf) return;   /* selten: Balken bleibt schwarz vom Vor-Frame */
+    uint16_t c = be16(color);
+    for (size_t i = 0; i < npx; i++) buf[i] = c;
+
+    lcd_set_window(x, y, x + w - 1, y + h - 1);
+    while (h > 0) {
+        int n = (h < rows) ? h : rows;
+        lcd_draw_bitmap(buf, (size_t)w * n * 2);
+        h -= n;
+    }
+    heap_caps_free(buf);
+}
+
 /* Synchrones SPI: keine ausstehenden Transfers -> kein Flush noetig */
 static void lcd_flush(void) { }
 
@@ -159,12 +189,15 @@ esp_err_t display_init(void)
         .miso_io_num = TFT_MISO,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = TFT_WIDTH * 2 * 4 + 8,
+        .max_transfer_sz = TFT_WIDTH * 2 * 16,   /* gross genug fuer 16 Bildzeilen pro
+                                                    SPI-Transfer (Blit-Optimierung) */
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(TFT_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "SPI-Bus init fehlgeschlagen");
 
     spi_device_interface_config_t dev_cfg = {
-        .clock_speed_hz = 40 * 1000 * 1000,   /* 40 MHz (wie im Referenzprojekt) */
+        .clock_speed_hz = 40 * 1000 * 1000,   /* 40 MHz: 80 MHz verrutschten die Pixel-Bits
+                                                 (Bild 90° gekippt / nur Linien) - zurueck auf
+                                                 den bewaehrten Wert des Referenzprojekts. */
         .mode = 0,
         .spics_io_num = TFT_CS,
         .queue_size = 7,
@@ -208,13 +241,16 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
     if (!s_spi || !src) return;
     if (src_w <= 0 || src_h <= 0) return;
 
-    /* Videobereich: zwischen OSD (oben) und Button-Leiste (unten) -
-     * das Bild uebermalt OSD/Buttons nicht, dadurch kein Flackern. */
-    const int vx0 = 0;
-    const int vy0 = UI_OSD_H;
-    const int vw  = TFT_WIDTH;
-    const int vh  = TFT_HEIGHT - UI_OSD_H - UI_BTN_H;
-    if (vh <= 0) return;
+    /* Videobereich VERKLEINERT und zentriert (gegen Tearing): Der Blit muss
+     * kuerzer als eine Scanout-Periode (~16ms) sein, sonst entstehen farbige
+     * horizontale Linien (Tearing). VIDEO_SCALE_PCT begrenzt die Flaeche. */
+    const int vw_full = TFT_WIDTH;
+    const int vh_full = TFT_HEIGHT - UI_OSD_H - UI_BTN_H;
+    const int vw  = (vw_full * VIDEO_SCALE_PCT) / 100;
+    const int vh  = (vh_full * VIDEO_SCALE_PCT) / 100;
+    const int vx0 = (vw_full - vw) / 2;
+    const int vy0 = UI_OSD_H + (vh_full - vh) / 2;
+    if (vw <= 0 || vh <= 0) return;
 
     /* Bilddimensionen nach gewaehlter Drehung */
     int iw, ih;
@@ -234,53 +270,67 @@ void display_blit_decoded(const uint16_t *src, int src_w, int src_h)
     int oy = vy0 + (vh - dh) / 2;
 
     /* Nicht vom Bild bedeckte Videobereich-Flaechen schwarz fuellen
-     * (Balken oben/unten bzw. links/rechts), kein altes GRAM. */
+     * (Balken oben/unten bzw. links/rechts), kein altes GRAM. Mit der
+     * schnellen Fuellung (grosse SPI-Transfers statt 1 Zeile pro Transfer). */
     if (oy > vy0) {
-        display_draw_filled_rect(vx0, vy0, vw, oy - vy0, 0x0000);
-        display_draw_filled_rect(vx0, oy + dh, vw, (vy0 + vh) - (oy + dh), 0x0000);
+        lcd_fill_rect_fast(vx0, vy0, vw, oy - vy0, 0x0000);
+        lcd_fill_rect_fast(vx0, oy + dh, vw, (vy0 + vh) - (oy + dh), 0x0000);
     }
     if (ox > vx0) {
-        display_draw_filled_rect(vx0, oy, ox - vx0, dh, 0x0000);
-        display_draw_filled_rect(ox + dw, oy, (vx0 + vw) - (ox + dw), dh, 0x0000);
+        lcd_fill_rect_fast(vx0, oy, ox - vx0, dh, 0x0000);
+        lcd_fill_rect_fast(ox + dw, oy, (vx0 + vw) - (ox + dw), dh, 0x0000);
     }
 
-    uint16_t *row = heap_caps_malloc((size_t)dw * 2, MALLOC_CAP_DMA);
-    if (!row) {
+    /* GROSSE SPI-TRANSFERS (originale 9fps-Variante): 16 Zeilen pro Transfer,
+     * EINMAL das Adressfenster fuer das GESAMTE Bild setzen - der Controller
+     * inkrementiert die Zielzeile nach den Daten automatisch. Diese Variante
+     * zeigte im 9fps-Betrieb keine Stoerlinien. (Ein Adressfenster pro Block
+     * brachte keinen Vorteil und konnte sporadisch farbige Linien erzeugen.) */
+    const int xfer_rows = 16;
+    uint16_t *rowbuf = heap_caps_malloc((size_t)dw * xfer_rows * 2, MALLOC_CAP_DMA);
+    if (!rowbuf) {
         ESP_LOGE(TAG, "display_blit_decoded: kein DMA-Puffer");
         return;
     }
 
-    /* EINMAL das Adressfenster fuer das GESAMTE Bild setzen: das ILI9341
-     * inkrementiert die Zielzeile nach jedem RAMWR-Datenblock automatisch.
-     * Vorher wurde pro Zeile ein lcd_set_window() (je 3 SPI-Kommandos) gesendet
-     * -> 219 Fenster-Setups pro Bild = 170-180 ms Anzeigezeit (grosser
-     * fps-Engpass). Jetzt nur 1 Setup -> Anzeige ~5x schneller. */
+    /* Skalierung OHNE Divisionen pro Pixel (Xtensa-Divisionen sind teuer und
+     * kosteten ~30-60 ms/Frame): Spalten-Mapping einmal vorab als Tabelle,
+     * Zeilen-Mapping als Festkomma-Akkumulator (1<<12 = 4096 Schritte). */
+    static uint16_t col_map[TFT_WIDTH];
+    uint32_t rx_step = ((uint32_t)iw << 12) / (uint32_t)dw;
+    uint32_t rx_f = 0;
+    for (int dx = 0; dx < dw; dx++) {
+        col_map[dx] = (uint16_t)(rx_f >> 12);
+        rx_f += rx_step;
+    }
+    uint32_t ry_step = ((uint32_t)ih << 12) / (uint32_t)dh;
+    uint32_t ry_f = 0;
+
+    /* EINMAL das Adressfenster fuer das GESAMTE Bild */
     lcd_set_window(ox, oy, ox + dw - 1, oy + dh - 1);
-    for (int dy = 0; dy < dh; dy++) {
-        int ry = (dy * ih) / dh;
-        if (ry < 0) ry = 0;
-        if (ry >= ih) ry = ih - 1;
-        for (int dx = 0; dx < dw; dx++) {
-            int rx = (dx * iw) / dw;
-            if (rx < 0) rx = 0;
-            if (rx >= iw) rx = iw - 1;
-            int sx, sy;
-            if (s_rotation == 1) {            /* CW */
-                sx = src_w - 1 - ry;
-                sy = rx;
-            } else if (s_rotation == 2) {     /* CCW */
-                sx = ry;
-                sy = src_h - 1 - rx;
-            } else {                          /* 0 = ohne Rotation */
-                sx = rx;
-                sy = ry;
+
+    int dy = 0;
+    while (dy < dh) {
+        int nrows = (dh - dy < xfer_rows) ? (dh - dy) : xfer_rows;
+        uint16_t *p = rowbuf;
+        for (int k = 0; k < nrows; k++, dy++) {
+            int ry = (int)(ry_f >> 12);
+            ry_f += ry_step;
+            if (ry >= ih) ry = ih - 1;
+            if (s_rotation == 0) {            /* ohne Rotation: haeufigster Fall */
+                const uint16_t *srow = &src[ry * src_w];
+                for (int dx = 0; dx < dw; dx++) *p++ = srow[col_map[dx]];
+            } else if (s_rotation == 1) {     /* CW */
+                int sx = src_w - 1 - ry;
+                for (int dx = 0; dx < dw; dx++) *p++ = src[col_map[dx] * src_w + sx];
+            } else {                          /* CCW */
+                for (int dx = 0; dx < dw; dx++) *p++ = src[(src_h - 1 - col_map[dx]) * src_w + ry];
             }
-            row[dx] = src[sy * src_w + sx];
         }
-        lcd_draw_bitmap(row, (size_t)dw * 2);
+        lcd_draw_bitmap(rowbuf, (size_t)dw * nrows * 2);
     }
     lcd_flush();
-    heap_caps_free(row);
+    heap_caps_free(rowbuf);
 }
 
 void display_set_rotation(int rotation)

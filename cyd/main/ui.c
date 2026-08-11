@@ -79,11 +79,16 @@ void ui_draw_overlay(void)
     /* Diagnose-Test aktiv: nichts ueber den Geometrie-Test zeichnen */
     if (s_diag_mode) return;
 
-    /* OSD oben: Version links, fps rechts, Status darunter (KEINE Buttons) */
+    /* OSD oben: Version links, fps rechts, Status darunter (KEINE Buttons).
+     * Die Zeilen werden VOR dem Text schwarz uebermalt, damit kuerzerer neuer
+     * Text (z.B. "Verbunden" nach "CAM weg - Reconnect") die alten Zeichen
+     * sauber ueberschreibt und kein Text-Rest stehen bleibt. */
     snprintf(line, sizeof(line), "v0.1.%d", BUILD_NUMBER);
     display_draw_text(2, 2, line, 0xFFFF, 0x0000);
     snprintf(line, sizeof(line), "%lu fps", (unsigned long)stream_get_fps());
+    display_draw_filled_rect(TFT_WIDTH - 70, 2, 68, 8, 0x0000);   /* fps-Zeile loeschen */
     display_draw_text(TFT_WIDTH - 70, 2, line, 0xFFFF, 0x0000);
+    display_draw_filled_rect(2, 12, TFT_WIDTH - 4, 8, 0x0000);    /* Status-Zeile loeschen */
     display_draw_text(2, 12, s_status, 0xFFFF, 0x0000);
 
     if (s_menu_open) {

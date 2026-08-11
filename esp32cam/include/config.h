@@ -58,11 +58,15 @@ extern "C" {
 #define CAM_XCLK_FREQ_HZ        16000000    /* 16 MHz: stabileres DVP-Timing (weniger NO-SOI) */
 #define CAM_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define CAM_PIXEL_FORMAT        PIXFORMAT_JPEG
-#define CAM_FRAME_SIZE          FRAMESIZE_QVGA  /* 320x240: kleine Frames -> viel hoehere Bildrate
-                                                   ueber den SoftAP, reicht fuer CYD-Display (240x320)
-                                                   UND fuer die iPhone-WebUI voellig aus. Vorher SVGA
-                                                   (800x600) = ~32KB pro Frame, sättigte den SoftAP. */
-#define CAM_JPEG_QUALITY        16          /* staerkere Kompression -> kleinere Frames (~7KB), kein send-Blocking */
+/* WICHTIG (OV2640-Quirk): Bei JPEG-Ausgabe liefert der OV2640 nie die QVGA-
+ * Groesse - der DSP-Zoom wird im JPEG-Pfad nicht angewendet, das Minimum ist
+ * CIF 400x296 (sendet der Sensor real, auch mit FRAMESIZE_QVGA eingestellt).
+ * Der CYD dekodiert daher CIF und skaliert 1:2 (200x148) - ist schaerfer als
+ * QVGA 1:2 (160x120) und die Einstellung hier ist die kleinste moegliche. */
+#define CAM_FRAME_SIZE          FRAMESIZE_QVGA  /* real -> CIF 400x296 (OV2640-JPEG-Minimum) */
+#define CAM_JPEG_QUALITY        16          /* 9fps-Konfiguration: kleine JPEGs (~6KB) -> CAM-
+                                               Encoding und Uebertragung schnell. q12 (~10-14KB) war
+                                               schoener, kostete aber zu viele fps. */
 #define CAM_FB_COUNT            4           /* mehr Puffer = weniger NO-SOI/Ueberlauf */
 
 /* =====================================================================

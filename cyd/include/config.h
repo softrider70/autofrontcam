@@ -87,9 +87,16 @@ extern "C" {
 #define CAM_CAPTURE_PATH    "/capture"
 #define CAM_API_PATH        "/api/config"
 
-#define STREAM_POLL_MS      50          /* ~20 fps Polling */
-#define STREAM_FETCH_TIMEOUT_MS 1000    /* 1s: schnellerer Abruch bei CAM-Ausfall
-                                           (2s liess die Erkennung ~6s dauern) */
+/* Roh-JPEG-Stream der CAM (Port 8080): persistente TCP-Verbindung, pro Frame
+ * 4-Byte-Laenge (big-endian) + JPEG-Daten. Kein HTTP-Handshake pro Frame
+ * (das war der fps-Engpass beim Einzelbild-Fetch). */
+#define STREAM_TCP_PORT     8080
+
+#define STREAM_POLL_MS      5           /* 5 ms zwischen Frames (Stream): kein kuenstliches
+                                           Warten mehr - 50 ms kosteten ~20% der Frame-Zeit.
+                                           Ohne Verbindung nutzt stream.c 50 ms (Leerlauf). */
+#define STREAM_FETCH_TIMEOUT_MS 1500    /* 1.5s: groesserer Puffer fuer groessere JPEGs (q12 ~10KB).
+                                            1s liess bei q8-JPEGs haeufig EAGAIN ausloesen (fps-Einbruch). */
 #define STREAM_FAIL_THRESHOLD 3         /* Fetch-Fehler bis HTTP-Client-Neuaufbau +
                                            hartes WiFi-Reconnect (Verbindungs-Watchdog) */
 
@@ -111,6 +118,11 @@ extern "C" {
  * dadurch bleibt das Video fast vollflaechig. */
 #define UI_OSD_H        20      /* Hoehe OSD oben (Version/fps/Status) */
 #define UI_BTN_H        0       /* kein fester Button-Bereich (Menue temporaer) */
+
+/* Video-Anzeige: volle Flaeche (100%). Eine Verkleinerung (55%) hat die
+ * farbigen Linien NICHT reduziert - die Ursache war nicht Tearing, sondern
+ * unfertige JPEG-Frames im Stream (per SOI/EOI-Validierung gefiltert). */
+#define VIDEO_SCALE_PCT     100
 
 /* =====================================================================
  * FreeRTOS Task-Konfiguration

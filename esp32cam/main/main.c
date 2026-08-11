@@ -124,6 +124,119 @@ static esp_err_t capture_handler(httpd_req_t *req)
 }
 
 /* =====================================================================
+ * Roh-JPEG-Stream (TCP Port 8080) fuer den CYD: persistente Verbindung.
+ * Pro Frame: 4-Byte-Laenge (big-endian) + JPEG-Daten. Kein HTTP-Overhead
+ * pro Frame -> deutlich mehr fps als Einzelbild-Fetch (der CYD muss nicht
+ * pro Frame eine neue Verbindung aufbauen). Blockiert nur diesen Task;
+ * der httpd (Web-UI /capture /api) bleibt voll bedienbar.
+ * ===================================================================== */
+#define STREAM_TCP_PORT   8080
+#define STREAM_TASK_STACK 4096
+
+static void stream_task(void *arg)
+{
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) {
+        ESP_LOGE(TAG, "Stream-Socket fehlgeschlagen");
+        vTaskDelete(NULL);
+    }
+    int one = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in saddr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+        .sin_port = htons(STREAM_TCP_PORT),
+    };
+    if (bind(listen_fd, (struct sockaddr *)&saddr, sizeof(saddr)) != 0) {
+        ESP_LOGE(TAG, "Stream-Bind fehlgeschlagen (Port %d)", STREAM_TCP_PORT);
+        close(listen_fd);
+        vTaskDelete(NULL);
+    }
+    if (listen(listen_fd, 1) != 0) {
+        ESP_LOGE(TAG, "Stream-Listen fehlgeschlagen");
+        close(listen_fd);
+        vTaskDelete(NULL);
+    }
+    ESP_LOGI(TAG, "Roh-JPEG-Stream bereit auf Port %d", STREAM_TCP_PORT);
+
+    while (1) {
+        int sock = accept(listen_fd, NULL, NULL);
+        if (sock < 0) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+        ESP_LOGI(TAG, "Stream-Client verbunden (Port %d)", STREAM_TCP_PORT);
+
+        /* Frames senden, bis die Verbindung abbricht */
+        while (1) {
+            uint8_t *jpeg = NULL;
+            size_t len = 0;
+            if (camera_capture_jpeg(&jpeg, &len) != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
+            if (!jpeg || len < 8) {
+                camera_fb_return();
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
+            /* Nur FERTIGE JPEGs senden: Bei kontinuierlichem Capturen kann die
+             * CAM gelegentlich ein unfertiges Frame liefern (fehlender
+             * SOI/EOI-Marker, bekanntes "NO-SOI"). So ein kaputtes JPEG wuerde
+             * beim CYD farbige Linien erzeugen -> verwerfen. */
+            if (jpeg[0] != 0xFF || jpeg[1] != 0xD8 ||
+                jpeg[len - 2] != 0xFF || jpeg[len - 1] != 0xD9) {
+                camera_fb_return();
+                continue;
+            }
+            /* Frame kopieren und Mutex sofort freigeben (send kann blockieren) */
+            uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+            if (copy) {
+                memcpy(copy, jpeg, len);
+            }
+            camera_fb_return();
+            if (!copy) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
+
+            /* 4-Byte-Laenge (big-endian) + JPEG-Daten senden */
+            uint8_t hdr[4] = {
+                (uint8_t)((len >> 24) & 0xFF),
+                (uint8_t)((len >> 16) & 0xFF),
+                (uint8_t)((len >> 8) & 0xFF),
+                (uint8_t)(len & 0xFF),
+            };
+            if (send(sock, hdr, 4, 0) <= 0) {
+                heap_caps_free(copy);
+                break;   /* Client weg */
+            }
+            size_t sent = 0;
+            while (sent < len) {
+                int m = send(sock, copy + sent, len - sent, 0);
+                if (m <= 0) { sent = 0; break; }
+                sent += (size_t)m;
+            }
+            heap_caps_free(copy);
+            if (sent == 0) break;   /* Client weg */
+
+            /* Kleine Pause zwischen den Frames: Die dauerhafte Capture-Last
+             * beim Stream (anders als /capture mit Pausen) kann beim Encodieren
+             * vereinzelte Frames beschae digen (farbige Linien beim CYD). Eine
+             * kurze Pause gibt dem Sensor/Encoder Zeit fuer saubere Frames. */
+            vTaskDelay(pdMS_TO_TICKS(40));
+        }
+        close(sock);
+        ESP_LOGI(TAG, "Stream-Client getrennt");
+    }
+}
+
+static void stream_server_start(void)
+{
+    xTaskCreate(stream_task, "stream", STREAM_TASK_STACK, NULL, 5, NULL);
+}
+
+/* =====================================================================
  * API: /api/config  (GET = JSON, POST = Form-encoded)
  * ===================================================================== */
 
@@ -546,6 +659,10 @@ void app_main(void)
 
     /* Haupt-Webserver (Web-UI + API + /capture + OTA + Portal) starten */
     start_main_server();
+
+    /* Roh-JPEG-Stream (TCP Port 8080) fuer den CYD: persistente Verbindung,
+     * deutlich mehr fps als Einzelbild-Fetch. */
+    stream_server_start();
 
     /* Self-Healing-Watchdog: resettet bei Verbindungs-Problemen eigenstaendig
      * den Server, dann WiFi/AP, zuletzt per Software-Reset (die CAM ist verbaut
