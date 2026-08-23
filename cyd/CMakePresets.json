@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "CYD (ESP32, ESP-IDF)",
+      "description": "autofrontcam cyd - Cheap Yellow Display ESP32-2432S028R (4MB, kein PSRAM)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "toolchainFile": "$env{IDF_PATH}/tools/cmake/toolchain-esp32.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "IDF_TARGET": "esp32",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "YES"
+      },
+      "vendor": {
+        "espressif": {
+          "settings": {
+            "compileArgs": [],
+            "ninjaArgs": [],
+            "flashBaudRate": "460800",
+            "monitorBaudRate": "115200"
+          }
+        }
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "displayName": "Build (cyd)"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    }
+  ]
+}

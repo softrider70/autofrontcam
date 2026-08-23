@@ -12,6 +12,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -491,27 +492,8 @@ void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t 
 void display_draw_filled_rect(int x, int y, int w, int h, uint16_t color)
 {
     if (!s_spi) return;
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (w <= 0 || h <= 0) return;
-    if (x + w > TFT_WIDTH)  w = TFT_WIDTH - x;
-    if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
-    if (w <= 0 || h <= 0) return;
-
-    uint16_t *row = heap_caps_malloc((size_t)w * 2, MALLOC_CAP_DMA);
-    if (!row) {
-        ESP_LOGE(TAG, "display_draw_filled_rect: kein DMA-Puffer");
-        return;
-    }
-    uint16_t c = be16(color);
-    for (int i = 0; i < w; i++) row[i] = c;
-
-    for (int ry = 0; ry < h; ry++) {
-        lcd_set_window(x, y + ry, x + w - 1, y + ry);
-        lcd_draw_bitmap(row, (size_t)w * 2);
-    }
+    lcd_fill_rect_fast(x, y, w, h, color);
     lcd_flush();
-    heap_caps_free(row);
 }
 
 void display_draw_rect(int x, int y, int w, int h, uint16_t color)
@@ -520,6 +502,68 @@ void display_draw_rect(int x, int y, int w, int h, uint16_t color)
     display_draw_filled_rect(x, y + h - 1, w, 1, color);
     display_draw_filled_rect(x, y, 1, h, color);
     display_draw_filled_rect(x + w - 1, y, 1, h, color);
+}
+
+/* Linie zeichnen mit Breite, als gefuelltes Parallelogramm (Scanline-Fill):
+ * pro Bildzeile EIN Adressfenster + EIN Transfer statt pro Pixel. Das alte
+ * Pixel-fuer-Pixel-Verfahren kostete ~17000 SPI-Transfers pro Frame (2 Linien
+ * Breite 6) und drueckte die fps von 9 auf 3. Farbwert RGB565.
+ * Fuer die Kalibrierungslinien (rot/gelb). */
+void display_draw_line(int x0, int y0, int x1, int y1, int width, uint16_t color)
+{
+    if (!s_spi) return;
+    if (width < 1) width = 1;
+
+    float dxv = (float)(x1 - x0), dyv = (float)(y1 - y0);
+    float len = sqrtf(dxv * dxv + dyv * dyv);
+    if (len < 0.5f) return;
+    float nx = -dyv / len;   /* senkrecht zur Linienrichtung */
+    float ny =  dxv / len;
+    float half = (float)width / 2.0f;
+
+    /* 4 Ecken des dicken Linien-Rechtecks */
+    float px[4], py[4];
+    px[0] = x0 + nx * half;  py[0] = y0 + ny * half;
+    px[1] = x1 + nx * half;  py[1] = y1 + ny * half;
+    px[2] = x1 - nx * half;  py[2] = y1 - ny * half;
+    px[3] = x0 - nx * half;  py[3] = y0 - ny * half;
+
+    int ymin = (int)floorf(fminf(fminf(py[0], py[1]), fminf(py[2], py[3])));
+    int ymax = (int)ceilf(fmaxf(fmaxf(py[0], py[1]), fmaxf(py[2], py[3])));
+    if (ymin < 0) ymin = 0;
+    if (ymax > TFT_HEIGHT - 1) ymax = TFT_HEIGHT - 1;
+    if (ymin > ymax) return;
+
+    uint16_t *row = heap_caps_malloc((size_t)TFT_WIDTH * 2, MALLOC_CAP_DMA);
+    if (!row) return;
+    uint16_t c = be16(color);
+
+    for (int y = ymin; y <= ymax; y++) {
+        float fy = (float)y;
+        float xmin = 1e9f, xmax = -1e9f;
+        for (int e = 0; e < 4; e++) {
+            int f = (e + 1) & 3;
+            float ax = px[e], ay = py[e], bx = px[f], by = py[f];
+            if ((ay <= fy && by > fy) || (by <= fy && ay > fy)) {
+                float t = (fy - ay) / (by - ay);
+                float x = ax + t * (bx - ax);
+                if (x < xmin) xmin = x;
+                if (x > xmax) xmax = x;
+            }
+        }
+        if (xmax < xmin) continue;
+        int xi0 = (int)ceilf(xmin - 0.5f);
+        int xi1 = (int)floorf(xmax + 0.5f);
+        if (xi0 < 0) xi0 = 0;
+        if (xi1 > TFT_WIDTH - 1) xi1 = TFT_WIDTH - 1;
+        if (xi1 < xi0) continue;
+        int n = xi1 - xi0 + 1;
+        for (int i = 0; i < n; i++) row[i] = c;
+        lcd_set_window(xi0, y, xi1, y);
+        lcd_draw_bitmap(row, (size_t)n * 2);
+    }
+    lcd_flush();
+    heap_caps_free(row);
 }
 
 void display_test_pattern(void)

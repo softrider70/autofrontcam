@@ -387,6 +387,14 @@ static void blit_task(void *arg)
     bool was_connected = false;
     TickType_t last_overlay = 0;
 
+    /* Eingefrorener Video-Frame fuer den Linien-Modus: hält den letzten
+     * Normalbetrieb-Frame fest. Im Linien-Modus wird er bei jedem ankommenden
+     * Frame neu geblittet (loescht die alte Linienposition) und dann zeichnet
+     * das Overlay Linien + Rand-Buttons - dadurch kein Flackern, keine
+     * Geisterbilder, und die Steuerung bleibt reaktionsschnell. */
+    static uint16_t *s_freeze = NULL;
+    static int s_freeze_w = 0, s_freeze_h = 0;
+
     while (1) {
         /* Auf einen fertig dekodierten Frame warten (max. 500 ms: so bleibt der
          * Overlay/OSD auch ohne Frames aktiv und die UI friert nicht ein). */
@@ -394,17 +402,34 @@ static void blit_task(void *arg)
         bool have_frame = (xQueueReceive(s_dec_ready_q, &d, pdMS_TO_TICKS(500)) == pdTRUE);
 
         if (have_frame) {
-            /* Wenn Touch-Menue ODER Diagnose-Test aktiv sind: Bild nicht zeichnen
-             * (sonst wuerde es Menue bzw. Geometrie-Test uebermalen). */
-            if (!ui_menu_is_open() && !ui_diag_is_active()) {
-                /* Diagnose: Anzeigezeit messen (laeuft jetzt auf Kern 1) */
-                TickType_t tb0 = xTaskGetTickCount();
-                display_blit_decoded(s_dec_buf[d], s_dec_w[d], s_dec_h[d]);
-                TickType_t tb1 = xTaskGetTickCount();
-                int blit_ms = (int)((tb1 - tb0) * portTICK_PERIOD_MS);
-                if (blit_ms > 30) {
-                    ESP_LOGW(TAG, "Anzeige langsam: %d ms (%dx%d)",
-                             blit_ms, s_dec_w[d], s_dec_h[d]);
+            bool line_edit = ui_line_edit_active();
+            bool show_video = !ui_menu_is_open() && !ui_diag_is_active();
+            if (show_video) {
+                if (!line_edit) {
+                    /* Diagnose: Anzeigezeit messen (laeuft jetzt auf Kern 1) */
+                    TickType_t tb0 = xTaskGetTickCount();
+                    display_blit_decoded(s_dec_buf[d], s_dec_w[d], s_dec_h[d]);
+                    TickType_t tb1 = xTaskGetTickCount();
+                    int blit_ms = (int)((tb1 - tb0) * portTICK_PERIOD_MS);
+                    if (blit_ms > 30) {
+                        ESP_LOGW(TAG, "Anzeige langsam: %d ms (%dx%d)",
+                                 blit_ms, s_dec_w[d], s_dec_h[d]);
+                    }
+                    /* Freeze-Frame aktuell halten (fuer spaeteren Linien-Modus) */
+                    int n = s_dec_w[d] * s_dec_h[d];
+                    if (!s_freeze || s_freeze_w != s_dec_w[d] || s_freeze_h != s_dec_h[d]) {
+                        if (s_freeze) heap_caps_free(s_freeze);
+                        s_freeze = heap_caps_malloc((size_t)n * 2, MALLOC_CAP_DMA);
+                        s_freeze_w = s_dec_w[d]; s_freeze_h = s_dec_h[d];
+                    }
+                    if (s_freeze) memcpy(s_freeze, s_dec_buf[d], (size_t)n * 2);
+                    /* Kalibrierungslinien (rot/gelb) ueber das Video (keine Buttons) */
+                    ui_draw_video_overlay();
+                } else if (s_freeze) {
+                    /* Linien-Modus: eingefrorenes Video neu blitten (uebermalt die
+                     * alte Linie), dann Linien + Rand-Buttons der aktiven Linie. */
+                    display_blit_decoded(s_freeze, s_freeze_w, s_freeze_h);
+                    ui_draw_video_overlay();
                 }
             }
             frame_count++;
