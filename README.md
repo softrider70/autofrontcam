@@ -17,8 +17,9 @@ eigenständiger **Display-Client**, der sich per WLAN mit dem Kamera-SoftAP verb
 Kamerabild auf dem ILI9341-Display (**320×240 Landscape**) anzeigt und per **Touch-Menü**
 Helligkeit/Rotation/Kalibrierung steuert.
 
-> **Zwei Geräte = zwei eigenständige ESP-IDF-Projekte im selben Repo** (`esp32cam/` + `cyd/`),
-> keine Branches. Details siehe unten unter „Zwei Geräte – Projektaufbau“.
+> **Mehrere Geräte = eigenständige ESP-IDF-Projekte im selben Repo** (`esp32cam/` + `cyd/` + `tft/`).
+> Ausnahme: Das neue `tft`-Projekt (ESP32 + 2.8"-SPI-Display) wird im **Git-Branch `tft`**
+> entwickelt (Display-Bring-up). Details siehe unten unter „Zwei Geräte – Projektaufbau“.
 >
 > **Aktueller Stand des Streams:** Die Kamera liefert **keinen echten MJPEG-Stream** mehr.
 > Es wird ein einzelnes JPEG pro HTTP-Request (`GET /capture`) auf **Port 80** geliefert; der
@@ -226,6 +227,7 @@ angesteckt sein muss**:
 |---|---|---|---|
 | `esp32cam` | AI-Thinker ESP32-CAM (COM4) | `esp32cam/` | `autofrontcam.bin` |
 | `cyd` | CYD ESP32-2432S028R | `cyd/` | `autofrontcam_cyd.bin` |
+| `tft` | ESP32-Dev-Board + 2.8"-SPI-Display (Branch `tft`) | `tft/` | `autofrontcam_tft.bin` |
 
 ```powershell
 . ..\lora\activate-esp-idf.ps1          # ESP-IDF Umgebung aktivieren (einmal pro Terminal)
@@ -278,6 +280,17 @@ autofrontcam/
 │   │   ├── touch.c            XPT2046-Touch (SPI3, Druckschwelle 300, Kalibrier-Modus)
 │   │   └── ui.c               OSD + Touch-Menü (BRI/ROT/KALIB/DIAG/ZU -> CAM-API)
 │   └── include/               Header des CYD (config.h, version.h.in)
+├── tft/                       ESP-IDF-Projekt 3: Display-Client (ESP32 + 2.8"-SPI-Display)
+│   ├── CMakeLists.txt         Projekt-Root (autofrontcam_tft, verweist auf ../components)
+│   ├── sdkconfig.defaults     Board-Konfiguration (4MB, kein PSRAM)
+│   ├── partitions.csv         Einfaches Layout ohne OTA
+│   ├── main/
+│   │   ├── main.c             Einstieg (NVS, Display, Selbsttest, Touch optional, Tasks)
+│   │   ├── display.c          ILI9341-Treiber (240x320 Portrait, roher SPI + Mutex) + 5x7-Font
+│   │   ├── stream.c           WiFi-STA + JPEG-Abruf (/capture) + Dekodierung + Anzeige
+│   │   ├── touch.c            XPT2046-Touch (optional, TFT_HAVE_TOUCH=0 default)
+│   │   └── ui.c               OSD + Menü (BRI/ROT/KALIB/DIAG/ZU -> CAM-API)
+│   └── include/               Header des tft (config.h, version.h.in)
 ├── components/
 │   └── nvs_config/            GEMEINSAME Komponente (NVS-Helfer, beide Projekte)
 ├── tools/
@@ -299,6 +312,12 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
   Flashen an einem USB-Port bestünde die Gefahr, die falsche Firmware zu flashen.
 - **Zwei Unterprojekte im selben Repo** sind die sauberste Lösung: getrennte `build/`,
   getrennte `sdkconfig`, getrennte Flash-Befehle, gemeinsamer Code in `components/`.
+
+> **Branch `tft` (Ausnahme):** Für den Display-Bring-up des neuen `tft`-Projekts (ESP32 +
+> 2.8"-SPI-Display, ILI9341) wurde ein Git-Branch `tft` angelegt. Das `tft/`-Projekt ist
+> eine vom CYD abgeleitete Variante (config.h-Pins für das 2.8"-Modul, Selbsttest beim
+> Boot aktiv, Touch optional/deaktiviert). Nach dem Bring-up kann der Branch in `main`
+> zurückgeführt werden.
 
 **Netzwerk-Topologie (CYD als Anzeige):**
 - Der ESP32-CAM eröffnet den SoftAP `Cam-AP` (offen, IP `10.1.1.1`, max. **1** Client).
