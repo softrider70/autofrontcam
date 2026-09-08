@@ -80,12 +80,15 @@ extern "C" {
 #define TOUCH_I2C_ADDR      0x38
 #define TOUCH_I2C_CLK_HZ    400000
 
-/* Roh-Koordinatenbereich des FT6336U -> Panel skalieren.
- * FT6336U liefert i.d.R. Werte bis ~1023 (12 Bit) bzw. bis zur im IC
- * hinterlegten Maximalgrenze. AUF HW KALIBRIEREN (Touch-Test ausgeben). */
-#define TOUCH_RAW_MAX_X     1024
-#define TOUCH_RAW_MAX_Y     1024
-#define TOUCH_SWAP_XY       0       /* ggf. tauschen (Orientierung) */
+/* Touch-Kalibrierung (2026-09-08, per Cursor-Test): Der FT6336U-Touch ist um
+ * 90° gedreht relativ zum Querformat-Display. Mapping:
+ *   Bild-Hoehe  = raw_x   (0..~319)
+ *   Bild-Breite = (TOUCH_RY_MAX - raw_y)   (raw_y klein = rechter Rand)
+ * Rohbereiche aus Eck-Taps gemessen; Feinjustage bei Bedarf spaeter. */
+#define TOUCH_RX_MIN    0
+#define TOUCH_RX_MAX    319
+#define TOUCH_RY_MIN    0
+#define TOUCH_RY_MAX    466
 
 /* =====================================================================
  * WiFi (Station) - verbindet sich mit dem ESP32-CAM SoftAP

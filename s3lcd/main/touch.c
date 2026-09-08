@@ -98,3 +98,26 @@ esp_err_t touch_read(touch_point_t *pt)
     pt->touched = true;
     return ESP_OK;
 }
+
+esp_err_t touch_read_screen(touch_screen_t *p)
+{
+    touch_point_t raw;
+    if (!p) return ESP_ERR_INVALID_ARG;
+
+    esp_err_t ret = touch_read(&raw);
+    if (ret != ESP_OK) return ret;
+    p->touched = raw.touched;
+    if (!raw.touched) return ESP_OK;
+
+    /* 90°-Mapping, andere Drehrichtung (Cursor-Test 2026-09-08):
+     * raw_y -> Bild-Breite (direkt), raw_x -> Bild-Hoehe (invertiert) */
+    long span_rx = (long)(TOUCH_RX_MAX - TOUCH_RX_MIN);
+    long span_ry = (long)(TOUCH_RY_MAX - TOUCH_RY_MIN);
+    p->x = span_ry > 0 ? (int)(((long)(raw.raw_y - TOUCH_RY_MIN) * (TFT_WIDTH - 1)) / span_ry) : 0;
+    p->y = span_rx > 0 ? (int)(((long)(TOUCH_RX_MAX - raw.raw_x) * (TFT_HEIGHT - 1)) / span_rx) : 0;
+    if (p->x < 0) p->x = 0;
+    if (p->x >= TFT_WIDTH)  p->x = TFT_WIDTH - 1;
+    if (p->y < 0) p->y = 0;
+    if (p->y >= TFT_HEIGHT) p->y = TFT_HEIGHT - 1;
+    return ESP_OK;
+}

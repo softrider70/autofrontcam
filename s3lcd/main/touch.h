@@ -17,8 +17,17 @@ typedef struct {
     int  raw_y;
 } touch_point_t;
 
+typedef struct {
+    bool touched;
+    int  x;         /* Display-Koordinate (0..TFT_WIDTH-1) */
+    int  y;         /* Display-Koordinate (0..TFT_HEIGHT-1) */
+} touch_screen_t;
+
 esp_err_t touch_init(void);
 
 /* Aktuellen (ersten) Touchpunkt lesen; touched=false wenn keiner. */
 esp_err_t touch_read(touch_point_t *pt);
+
+/* Touch lesen und per Kalibrierung (config.h) auf Display-Koordinaten mappen */
+esp_err_t touch_read_screen(touch_screen_t *p);
 
