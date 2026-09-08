@@ -21,6 +21,8 @@ static const char *TAG = "s3lcd_disp";
 #define CHUNK_MAX   12000   /* max. Bytes pro SPI-Transaktion (DMA) */
 
 static spi_device_handle_t s_spi = NULL;
+static bool s_swap = false;          /* Pixel-Bytes getauscht (lo,hi) */
+static uint8_t s_madctl_base = 0x60; /* Orientierung ohne BGR-Bit (0x08) */
 
 /* ---------- Low-Level ---------- */
 
@@ -112,10 +114,14 @@ esp_err_t display_init(void)
 
     /* ST7796S Basis-Init (Bring-up; auf Hardware verifizieren) */
     uint8_t madctl = ST7796S_MADCTL;
+    s_madctl_base = ST7796S_MADCTL & 0xF7;  /* BGR-Bit separat steuerbar */
     uint8_t colmod = 0x55;              /* 16 bpp RGB565 */
     lcd_write_cmd_data(0x36, &madctl, 1);
     lcd_write_cmd_data(0x3A, &colmod, 1);
 
+#if ST7796S_INVERT
+    lcd_write_cmd(0x21);                /* INVON - per Farbsweep ermittelt */
+#endif
     lcd_write_cmd(0x29);                /* DISPON */
     vTaskDelay(pdMS_TO_TICKS(50));
 
@@ -128,6 +134,25 @@ esp_err_t display_init(void)
 void display_backlight(bool on)
 {
     gpio_set_level(TFT_BL, on ? TFT_BL_ON : !TFT_BL_ON);
+}
+
+void display_set_byte_swap(bool swap)
+{
+    s_swap = swap;
+}
+
+void display_set_color_mode(bool bgr, bool invert)
+{
+    uint8_t madctl = (uint8_t)(s_madctl_base | (bgr ? 0x08 : 0x00));
+    lcd_write_cmd_data(0x36, &madctl, 1);
+    lcd_write_cmd(invert ? 0x21 : 0x20);   /* INVON / INVOFF */
+    ESP_LOGI(TAG, "Farbmodus: bgr=%d invert=%d (MADCTL 0x%02X)", bgr ? 1 : 0, invert ? 1 : 0, madctl);
+}
+
+void display_set_madctl(uint8_t madctl)
+{
+    lcd_write_cmd_data(0x36, &madctl, 1);
+    ESP_LOGI(TAG, "MADCTL 0x%02X", madctl);
 }
 
 /* ---------- Zeichnen ---------- */
@@ -152,8 +177,13 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color)
         return;
     }
     for (size_t i = 0; i + 1 < row_bytes; i += 2) {
-        row[i]     = (uint8_t)(color >> 8);
-        row[i + 1] = (uint8_t)(color & 0xFF);
+        if (s_swap) {
+            row[i]     = (uint8_t)(color & 0xFF);
+            row[i + 1] = (uint8_t)(color >> 8);
+        } else {
+            row[i]     = (uint8_t)(color >> 8);
+            row[i + 1] = (uint8_t)(color & 0xFF);
+        }
     }
     for (int yy = 0; yy < h; yy++) {
         lcd_write_data(row, row_bytes);

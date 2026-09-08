@@ -26,3 +26,8 @@ void display_test_pattern(void);
 
 /* Externer Zugriff fuer spaetere Blit-Funktionen (Reset Window setzen) */
 void display_set_window(int x0, int y0, int x1, int y1);
+
+/* Farbpfad-Test (Bring-up): zur Laufzeit umschalten */
+void display_set_byte_swap(bool swap);  /* Pixel-Bytes tauschen (lo/hi) */
+void display_set_color_mode(bool bgr, bool invert);  /* MADCTL-BGR + INVON/INVOFF */
+void display_set_madctl(uint8_t madctl);  /* voller MADCTL-Wert setzen (Orientierung) */

@@ -54,11 +54,14 @@ extern "C" {
 #define TFT_BL_ON           1
 
 /* Anzeige im Querformat (Kamerabild ist quer): 480 breit x 320 hoch.
- * ST7796S-Nativ ist 320x480 (Portrait); per MADCTL gedreht.
- * MADCTL 0x68 = MV|MX|BGR -> Querformat 480x320 (auf HW zu verifizieren!). */
+ * VERIFIZIERT am 2026-09-08 (per Sweeps auf Hardware):
+ *  - Farbsweep #5: bgr=1, byteSwap=0 (Big-Endian), invert=1 -> ST7796S_INVERT
+ *  - Orientierungs-Sweep: MADCTL 0x28 = MV|BGR (KEIN MX/MY!) -> Bild steht richtig
+ * Farben sind Big-Endian-RGB565 (kein Byte-Swap noetig). */
 #define TFT_WIDTH           480
 #define TFT_HEIGHT          320
-#define ST7796S_MADCTL      0x68
+#define ST7796S_MADCTL      0x28     /* MV|BGR (Orientierungs-Sweep-Ergebnis) */
+#define ST7796S_INVERT      1       /* INVON (0x21) noetig (Farbsweep-Ergebnis) */
 
 /* SPI-Takt: 40 MHz (alle Pins IOMUX; bei Problemen reduzieren) */
 #define TFT_SPI_CLK_HZ      (40 * 1000 * 1000)

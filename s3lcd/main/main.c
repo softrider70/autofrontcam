@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "config.h"
 #include "version.h"
@@ -41,12 +42,14 @@ void app_main(void)
         ESP_LOGW(TAG, "Touch nicht erreichbar - fahre ohne Touch fort");
     }
 
-    ESP_LOGI(TAG, "Bring-up laeuft. Farbtest am Display, Touch-Rohwerte im Log.");
+    display_test_pattern();
+    ESP_LOGI(TAG, "Bring-up OK (MADCTL 0x28, INVON): statisches Testmuster. Touch-Rohwerte im Log (Kalibrierung).");
+
     touch_point_t pt;
     for (;;) {
         if (touch_read(&pt) == ESP_OK && pt.touched) {
             ESP_LOGI(TAG, "Touch: raw_x=%d raw_y=%d", pt.raw_x, pt.raw_y);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(80));
     }
 }
