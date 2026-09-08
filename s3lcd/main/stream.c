@@ -161,6 +161,9 @@ static void show_jpeg(const uint8_t *jpeg, size_t len)
         .outbuf_size = 0,
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = JPEG_IMAGE_SCALE_0,
+        /* WICHTIG: swap=0 (Little-Endian in Puffer) - display_blit liest die
+         * Pixel als uint16_t (XTensa little-endian) und sendet high-first.
+         * NICHT wie CYD (dessen blit_decoded sendet roh big-endian -> swap=1)! */
         .flags.swap_color_bytes = 0,
     };
     esp_jpeg_image_output_t info = { 0 };
