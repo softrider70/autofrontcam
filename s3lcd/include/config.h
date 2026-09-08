@@ -15,8 +15,8 @@
  * (Projekt ../esp32cam, SoftAP "Cam-AP" 10.1.1.1).
  * Basis: tft/cyd, angepasst auf ESP32-S3 + ES3C40P.
  *
- * STATUS: Bring-up (Display + Touch). Display-Init (ST7796S) und
- * Touch-Skalierung sind auf Hardware zu verifizieren!
+ * STATUS: Bring-up VERIFIZIERT (2026-09-08). Jetzt: Display-Client-Betrieb
+ * (Stream von der ESP32-CAM) im Aufbau.
  */
 
 #ifndef CONFIG_H
@@ -33,10 +33,9 @@ extern "C" {
 
 /* =====================================================================
  * Testmodus: 1 = Standalone-Bring-up (Display-Farbtest + Touch-Rohwerte,
- * ohne Kamera/WiFi). 0 = normaler Display-Client-Betrieb (Stream), sobald
- * der Client portiert ist.
+ * ohne Kamera/WiFi). 0 = Display-Client-Betrieb (Stream von der CAM).
  * ===================================================================== */
-#define S3LCD_TEST_MODE     1
+#define S3LCD_TEST_MODE     0
 
 /* =====================================================================
  * Display ST7796S (320x480) - VERIFIZIERTE Pinbelegung (LCDWIKI-Manual).
@@ -80,11 +79,11 @@ extern "C" {
 #define TOUCH_I2C_ADDR      0x38
 #define TOUCH_I2C_CLK_HZ    400000
 
-/* Touch-Kalibrierung (2026-09-08, per Cursor-Test): Der FT6336U-Touch ist um
- * 90° gedreht relativ zum Querformat-Display. Mapping:
- *   Bild-Hoehe  = raw_x   (0..~319)
- *   Bild-Breite = (TOUCH_RY_MAX - raw_y)   (raw_y klein = rechter Rand)
- * Rohbereiche aus Eck-Taps gemessen; Feinjustage bei Bedarf spaeter. */
+/* Touch-Kalibrierung (2026-09-08, per Cursor-Test VERIFIZIERT): Der FT6336U
+ * ist um 90° gedreht relativ zum Querformat-Display. Mapping (siehe touch.c):
+ *   Bild_x = raw_y  (0..~466 -> 0..479)
+ *   Bild_y = TOUCH_RX_MAX - raw_x  (raw_x 0..~319 -> 319..0)
+ * Rohbereiche aus Eck-Taps gemessen. */
 #define TOUCH_RX_MIN    0
 #define TOUCH_RX_MAX    319
 #define TOUCH_RY_MIN    0
@@ -105,6 +104,24 @@ extern "C" {
 #define CAM_PORT_DEFAULT    80
 #define CAM_CAPTURE_PATH    "/capture"
 #define CAM_API_PATH        "/api/config"
+
+/* =====================================================================
+ * Stream/JPEG (Display-Client) - Puffer in PSRAM (8MB vorhanden)
+ * Der Client liest den Roh-JPEG-Stream der CAM (TCP 8080: 4-Byte-Laenge
+ * big-endian + JPEG) - dieselbe bewaehrte Schnittstelle wie der CYD-Client
+ * (HTTP-Einzelbild-Fetch /capture erwies sich als unzuverlaessig).
+ * ===================================================================== */
+#define STREAM_TCP_PORT         8080    /* Roh-JPEG-Stream der CAM */
+#define STREAM_FAIL_THRESHOLD   3       /* Fehlschlaege bis WiFi-Reconnect */
+#define STREAM_POLL_MS          20      /* Wartezeit zwischen Frames */
+#define STREAM_FETCH_TIMEOUT_MS 1500    /* HTTP-Timeout pro Request (ungenutzt) */
+#define JPEG_BUF_SIZE           60000   /* Puffer fuer ein JPEG (intern) */
+
+/* =====================================================================
+ * Tasks
+ * ===================================================================== */
+#define TASK_STACK_STREAM       6144
+#define TASK_PRIORITY_STREAM    5
 
 #ifdef __cplusplus
 }

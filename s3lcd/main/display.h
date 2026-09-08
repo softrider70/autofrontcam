@@ -21,6 +21,11 @@ void display_fill(uint16_t color);
 /* Rechteck mit RGB565 fuellen */
 void display_fill_rect(int x, int y, int w, int h, uint16_t color);
 
+/* RGB565-Bildbuffer (w x h) mit oberer linker Ecke bei (x,y) anzeigen.
+ * Muss voll im Bild liegen. Jeder Pixel ist uint16 (RGB565), wird big-endian
+ * (high byte zuerst) auf den SPI gebracht. */
+void display_blit(const uint16_t *pixels, int x, int y, int w, int h);
+
 /* Diagnose-Selbsttest: 4 Quadranten R/G/B/Schwarz + Rahmen + Orientierungs-Marker */
 void display_test_pattern(void);
 

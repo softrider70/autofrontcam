@@ -196,6 +196,33 @@ void display_fill(uint16_t color)
     display_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, color);
 }
 
+void display_blit(const uint16_t *pixels, int x, int y, int w, int h)
+{
+    if (!pixels || w <= 0 || h <= 0) return;
+    if (x < 0 || y < 0 || x + w > TFT_WIDTH || y + h > TFT_HEIGHT) {
+        ESP_LOGW(TAG, "blit ausserhalb (%d,%d %dx%d)", x, y, w, h);
+        return;
+    }
+
+    display_set_window(x, y, x + w - 1, y + h - 1);
+
+    size_t row_bytes = (size_t)w * 2;
+    uint8_t *row = heap_caps_malloc(row_bytes, MALLOC_CAP_DMA);
+    if (!row) {
+        ESP_LOGE(TAG, "DMA-Puffer (%u B) fehlgeschlagen", (unsigned)row_bytes);
+        return;
+    }
+    for (int yy = 0; yy < h; yy++) {
+        const uint16_t *src = pixels + (size_t)yy * w;
+        for (int xx = 0; xx < w; xx++) {
+            row[xx * 2]     = (uint8_t)(src[xx] >> 8);   /* high byte zuerst */
+            row[xx * 2 + 1] = (uint8_t)(src[xx] & 0xFF);
+        }
+        lcd_write_data(row, row_bytes);
+    }
+    heap_caps_free(row);
+}
+
 void display_test_pattern(void)
 {
     int w = TFT_WIDTH, h = TFT_HEIGHT;

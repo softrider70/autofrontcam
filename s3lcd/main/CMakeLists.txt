@@ -3,6 +3,7 @@ idf_component_register(
         main.c
         display.c
         touch.c
+        stream.c
     INCLUDE_DIRS
         ${CMAKE_SOURCE_DIR}/include
     REQUIRES
@@ -13,6 +14,11 @@ idf_component_register(
         esp_timer
         freertos
         heap
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_http_client
+        esp_jpeg
 )
 
 # Build-Nummer erhoehen + include/version.h generieren (VOR der main-Kompilierung)

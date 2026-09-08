@@ -19,6 +19,7 @@
 #include "version.h"
 #include "display.h"
 #include "touch.h"
+#include "stream.h"
 
 static const char *TAG = "s3lcd_main";
 
@@ -42,6 +43,8 @@ void app_main(void)
         ESP_LOGW(TAG, "Touch nicht erreichbar - fahre ohne Touch fort");
     }
 
+#if S3LCD_TEST_MODE
+    /* Bring-up: Touch-Kalibrier-Cursor (ohne Kamera/WiFi) */
     display_fill(0x0000);
     ESP_LOGI(TAG, "Touch-Kalibrierung: weisser Marker folgt dem Finger.");
     ESP_LOGI(TAG, "Fuehr den Finger zu allen 4 Ecken + Mitte und pruef, ob der Marker korrekt folgt.");
@@ -62,4 +65,10 @@ void app_main(void)
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+#else
+    /* Display-Client-Betrieb (Kamerabild von der ESP32-CAM) */
+    display_fill(0x0000);
+    ESP_LOGI(TAG, "Starte Stream-Client...");
+    stream_start();     /* blockiert */
+#endif
 }

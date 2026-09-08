@@ -6,9 +6,12 @@ CONFIG_IDF_TARGET="esp32s3"
 # Dual-Core
 CONFIG_FREERTOS_UNICORE=n
 
-# PSRAM: Milestone 2 (Display-Client mit grossen JPEG-Puffern). Fuer den
-# Bring-up (Display + Touch) bewusst AUS - Modus (QUAD/OCT) erst auf HW pruefen.
-# CONFIG_SPIRAM=y
+# PSRAM 8MB (ESP32-S3-WROOM-1-N16R8 = OCTAL, AP_3v3). IGNORE_NOTFOUND als
+# Sicherheit: falls der Modus doch falsch ist, bootet es ohne PSRAM weiter.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
 # CPU Takt
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
