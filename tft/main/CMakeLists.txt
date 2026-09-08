@@ -3,6 +3,7 @@ idf_component_register(
         main.c
         display.c
         stream.c
+        test.c
         touch.c
         ui.c
     INCLUDE_DIRS

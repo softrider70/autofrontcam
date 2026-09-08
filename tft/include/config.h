@@ -27,6 +27,13 @@ extern "C" {
 #define APP_VERSION_MINOR   1
 
 /* =====================================================================
+ * Testmodus: 1 = Standalone-Test (Display + Touch, ohne Kamera/WiFi) -
+ * sinnvoll, solange das Sendermodul (ESP32-CAM) nicht verfuegbar ist.
+ * 0 = normaler Display-Client-Betrieb (Stream vom ESP32-CAM).
+ * ===================================================================== */
+#define TFT_TEST_MODE       1
+
+/* =====================================================================
  * Display ILI9341 (2.8", 240x320) - VERIFIZIERTE Pinbelegung (Nutzer):
  * CS=15, RST=12, DC=2, MOSI(SDI)=13, SCK=14, BL(LED)=21, MISO=16.
  * TFT_RST >= 0 wird vom Treiber aktiv getoggelt (low->high beim Init).

@@ -331,6 +331,60 @@ und getrennten `sdkconfig`-Dateien. Gemeinsamer Code liegt einmal in `components
   Quell-IP) behält den Stream; andere bekommen **503**. Nach **10 s** ohne Anfrage
   von der aktiven IP kann ein anderes Gerät übernehmen (`STREAM_OWNER_TIMEOUT_MS`).
 
+### tft — Modul-Infos, Verkabelung & Testmodus (verbindlich)
+
+**Modul:** `TJCTM24028-SPI` = 2.8"-SPI-TFT mit **ILI9341** (240×320) + **XPT2046**-Touch.
+Baugleich zur LCDWiki-Klasse „2.8inch SPI Module ILI9341“ (SKU MSP2807). Verifizierte Moduldaten:
+
+| Eigenschaft | Wert |
+|---|---|
+| Driver IC | ILI9341 (SPI, 4-Draht) |
+| VCC | **3,3 V – 5 V** (beides erlaubt, 5 V-tolerante Variante) |
+| Logik-I/O | 3,3 V (TTL) |
+| LED | **Backlight-Steuerpin** (high = hell; für dauerhaft hell **direkt an 3,3 V** – kein 5 V nötig) |
+| SDO/MISO | optional (nur Read-Funktion, kann offen bleiben) |
+| CS / RESET | low-aktiv |
+| Touch | XPT2046, eigene Signale (T_CLK/T_CS/T_DIN/T_DO/T_IRQ) |
+
+**Verbindliche Verkabelung** (hinterlegt in `tft/include/config.h`):
+
+| Display | ESP32-Pin | | Touch (XPT2046) | ESP32-Pin |
+|---|---|---|---|---|
+| VCC | 3,3 V (oder 5 V) | | T_CLK | 26 |
+| GND | GND | | T_CS | 25 |
+| CS | 15 | | T_DIN (MOSI) | 33 |
+| RESET | 12 | | T_DO (MISO) | 39 (VN) |
+| DC/RS | 2 | | T_IRQ | 36 (VP) |
+| SDI (MOSI) | 13 | | | |
+| SCK | 14 | | | |
+| LED (Backlight) | 3,3 V oder GPIO 21 (high) | | | |
+| SDO (MISO) | 16 (optional) | | | |
+
+> **Hinweise/Stolperfallen:**
+> - **SPI-Takt:** SCK=14 / MOSI=13 sind VSPI-IOMUX-Pins, **MISO=16 nicht** → Full-Duplex-SPI
+>   ist auf 26,7 MHz begrenzt; 40 MHz ergibt `ESP_ERR_NOT_SUPPORTED` (Abort beim Boot).
+>   Der Treiber nutzt deshalb **20 MHz**. (Der CYD kann 40 MHz, weil dort alle 3 Pins
+>   IOMUX sind: 13/14/12.)
+> - **GPIO 12 (RESET)** = Strapping-Pin MTDI – falls der ESP nicht bootet, daran denken.
+> - **Flashen:** Der Auto-Download-Modus (DTR/RTS) schlägt auf diesem Board fehl
+>   („Wrong boot mode detected 0xb“). Abhilfe: **BOOT halten + EN tippen**, dann mit
+>   `esptool --before=no-reset` flashen (der Chip bleibt im Download-Modus).
+> - **Touch-GPIOs 36/39** = VP/VN (reine Eingänge) – passend für IRQ/MISO.
+
+**Testmodus (`TFT_TEST_MODE`):** Solange das Sendermodul (ESP32-CAM) nicht verfügbar ist,
+steht in `tft/include/config.h` `TFT_TEST_MODE=1` → beim Boot läuft ein Standalone-Test
+(`tft/main/test.c`): Geometrie-Test (4 farbige Quadranten, Eckmarker 1–4), Farbbalken/Schrift
+und Touch-Live-Test (Marker + Koordinaten-Log). Für den normalen Betrieb (Stream vom CAM)
+auf `0` stellen. Im Testmodus wird WiFi/Stream/UI weggelinkt (~197 KB Binary statt ~833 KB).
+
+**Bring-up-Status (Stand 2026-08-23):**
+- ✅ Boot, SPI-Bus und Touch-Init laufen fehlerfrei (Log), freier Heap ~299 KB im Testmodus.
+- ⚠️ Display zeigt **gleichmäßig weiß** = Panel **nicht initialisiert** (nach Init + Black-Fill
+  müsste es schwarz sein). Vermutete Ursache: **Wackelkontakt** (Display drückt gegen die
+  Pins → SPI-Befehle kommen korrumpiert an). **Nächster Schritt:** Verdrahtung löten/fixieren.
+- ⚠️ Touch: noch **nicht beurteilbar**, solange das Display nicht zeichnet (Marker wäre sonst
+  sichtbar). `Z1-Diagnose: 0` beim Boot ist normal (kein Druck).
+
 ### CYD — Hardware-Erkenntnisse (verifiziert)
 
 > Diese Erkenntnisse wurden am echten Board verifiziert und sind verbindlich.

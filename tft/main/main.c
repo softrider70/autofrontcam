@@ -1,8 +1,8 @@
 /*
  * main.c - tft (ESP32 + 2.8" SPI-Display) - Einstieg
  *
- * Boot-Ablauf: NVS -> Display -> (Selbsttest) -> Touch (optional) ->
- * Stream-Task (WiFi+JPEG) -> UI-Task
+ * Boot-Ablauf: NVS -> Display -> Touch (optional) -> dann je nach
+ * TFT_TEST_MODE: Standalone-Test (test.c) ODER Stream+UI (mit Kamera).
  */
 
 #include <string.h>
@@ -17,6 +17,7 @@
 #include "touch.h"
 #include "stream.h"
 #include "ui.h"
+#include "test.h"
 
 static const char *TAG = "tft_main";
 
@@ -43,18 +44,7 @@ void app_main(void)
     ESP_ERROR_CHECK(display_init());
     display_backlight(true);
 
-    /* Beim tft-Bring-up ist die Panel-Geometrie/Orientierung NOCH NICHT
-     * verifiziert -> Selbsttest beim Boot AKTIV: Rot -> Gruen -> Blau ->
-     * Schwarz, danach Text. So sind Verkabelung, Init und Farbordnung sofort
-     * beurteilbar. Nach erfolgreicher Verifikation auf #if 0 stellen. */
-#if 1
-    display_test_pattern();
-    display_draw_text(24, 150, "autofrontcam tft", 0xFFFF, 0x0000);
-    vTaskDelay(pdMS_TO_TICKS(2500));
-#endif
-
-    /* Touch (XPT2046) nur initialisieren, wenn im config.h aktiviert
-     * (TFT_HAVE_TOUCH). Default AUS -> Display-Bring-up bleibt der Fokus. */
+    /* Touch (XPT2046) initialisieren, wenn im config.h aktiviert (TFT_HAVE_TOUCH). */
 #if TFT_HAVE_TOUCH
     esp_err_t tret = touch_init();
     if (tret != ESP_OK) {
@@ -62,6 +52,12 @@ void app_main(void)
     }
 #endif
 
+#if TFT_TEST_MODE
+    /* Standalone-Test (ohne Kamera/WiFi): Geometrie-/Farb-/Touch-Test
+     * (test.c) - solange das Sendermodul (ESP32-CAM) nicht verfuegbar ist. */
+    test_start();
+#else
     stream_start();
     ui_start();
+#endif
 }
