@@ -1,0 +1,43 @@
+# s3lcd - LCDWIKI ES3C40P (ESP32-S3, 16MB Flash, 8MB PSRAM)
+# Abgeleitet von autofrontcam/tft, Ziel gewechselt auf ESP32-S3.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# Dual-Core
+CONFIG_FREERTOS_UNICORE=n
+
+# PSRAM: Milestone 2 (Display-Client mit grossen JPEG-Puffern). Fuer den
+# Bring-up (Display + Touch) bewusst AUS - Modus (QUAD/OCT) erst auf HW pruefen.
+# CONFIG_SPIRAM=y
+
+# CPU Takt
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Flash: 16MB (ES3C40P hat 25VQ128D = 16MB)
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Eigene Partitionstabelle (einfach, ohne OTA)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Console: native USB-Serial/JTAG (Board hat keinen UART-Bridge-Chip!)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Watchdogs: Task-WDT aus (Bring-up), INT-WDT an
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_ESP_TASK_WDT=n
+CONFIG_ESP_INT_WDT=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=100
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=1536
+CONFIG_ESP_IPC_TASK_STACK_SIZE=2048
+
+# Logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL=4
+
+# Compiler-Optimierung: -Os
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

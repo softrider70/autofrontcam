@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "s3lcd (ESP32-S3, ESP-IDF)",
+      "description": "LCDWIKI ES3C40P - ESP32-S3 + 4.0\" ST7796S + FT6336U (16MB Flash, 8MB PSRAM)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "toolchainFile": "$env{IDF_PATH}/tools/cmake/toolchain-esp32s3.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "IDF_TARGET": "esp32s3",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "YES"
+      },
+      "vendor": {
+        "espressif": {
+          "settings": {
+            "compileArgs": [],
+            "ninjaArgs": [],
+            "flashBaudRate": "460800",
+            "monitorBaudRate": "115200"
+          }
+        }
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "displayName": "Build (s3lcd)"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+/*
+ * version.h - Automatisch generiert von increment_build.py
+ */
+#pragma once
+
+#define APP_VERSION_MAJOR      @VERSION_MAJOR@
+#define APP_VERSION_MINOR      @VERSION_MINOR@
+#define BUILD_NUMBER           @BUILD_NUMBER@
+#define BUILD_TIMESTAMP        "@BUILD_TIMESTAMP@"
+#define APP_VERSION_STRING     "@VERSION_STRING@"
