@@ -250,41 +250,81 @@ void display_blit(const uint16_t *pixels, int x, int y, int w, int h)
     }
 }
 
-/* Rotiert ein RGB565-Bild (sw x sh) um seinen Mittelpunkt um 'deg' Grad
- * (0..359) und schreibt es an (dx,dy) in den Framebuffer. Bereiche ausserhalb
- * der Quelle (Ecken) werden schwarz. 8.8-Festkomma (kein FPU -> schnell). */
-void display_blit_rotated(const uint16_t *src, int sw, int sh,
-                          int dx, int dy, int deg)
+/* Rotiert ein RGB565-Bild (sw x sh) um seinen Mittelpunkt um 'deg' Zehntelgrad
+ * (0..3599), streckt es in X/Y um sx_pct/sy_pct Prozent (100 = unveraendert,
+ * Keystone-Ausgleich) und skaliert es so ein, dass es vollstaendig in den
+ * Zielrahmen (dw x dh) passt. WICHTIG: ohne die Einpassung liegt bei grossen
+ * Winkeln fast das ganze gedrehte Rechteck ausserhalb des Rahmens -> Bild waere
+ * (fast) schwarz. Das Bild wird nur verkleinert, nie vergroessert. Die
+ * Einpassung rechnet OHNE die Streckung/Verschiebung -> 100 % = unveraendert,
+ * 200 % = doppelt so breit/hoch (Bild laeuft dabei ueber den Rand), 50 % = halb
+ * so breit/hoch. (ox,oy) verschiebt die Bildmitte in Zielpixeln.
+ * Bereiche ausserhalb der Quelle (Ecken) werden schwarz. */
+void display_blit_rot_fit(const uint16_t *src, int sw, int sh,
+                          int dx, int dy, int dw, int dh, int deg,
+                          int sx_pct, int sy_pct, int ox, int oy)
 {
-    if (!s_fb || !src || sw <= 0 || sh <= 0) return;
-    if (dx < 0 || dy < 0 || dx + sw > TFT_WIDTH || dy + sh > TFT_HEIGHT) {
-        ESP_LOGW(TAG, "blit_rotated ausserhalb (%d,%d %dx%d)", dx, dy, sw, sh);
+    if (!s_fb || !src || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    if (dx < 0 || dy < 0 || dx + dw > TFT_WIDTH || dy + dh > TFT_HEIGHT) {
+        ESP_LOGW(TAG, "blit_rot_fit ausserhalb (%d,%d %dx%d)", dx, dy, dw, dh);
         return;
     }
-    deg = deg % 360;
-    if (deg < 0) deg += 360;
-    if (deg == 0) {   /* haeufigster Fall: direkte Kopie */
-        display_blit(src, dx, dy, sw, sh);
-        return;
-    }
+    if (sx_pct < 10) sx_pct = 10;
+    if (sy_pct < 10) sy_pct = 10;
 
-    const int FP = 65536;   /* 16.16 - cos/sin; Pixel-Offsets bleiben in px */
-    float rad = deg * 3.14159265f / 180.0f;
-    int cs = (int)(cosf(rad) * FP);
-    int sn = (int)(sinf(rad) * FP);
-    int cx0 = sw / 2, cy0 = sh / 2;
+    deg = deg % 3600;
+    if (deg < 0) deg += 3600;
 
-    for (int yy = 0; yy < sh; yy++) {
-        int fy = yy - cy0;
+    const int FP = 65536;                 /* 16.16 Festkomma */
+    float rad = (deg / 10.0f) * 3.14159265f / 180.0f;
+    float cf = cosf(rad), sf = sinf(rad);
+
+    /* Begrenzungsrahmen des gedrehten Bildes (in Quellpixeln) */
+    float bw = fabsf(sw * cf) + fabsf(sh * sf);
+    float bh = fabsf(sw * sf) + fabsf(sh * cf);
+    float sc = 1.0f;                      /* nur verkleinern */
+    if (bw > 0.0f && (dw / bw) < sc) sc = dw / bw;
+    if (bh > 0.0f && (dh / bh) < sc) sc = dh / bh;
+    int s_fp = (int)(sc * FP);
+    if (s_fp < 1) s_fp = 1;
+
+    /* Rueckrechnung Ziel -> Quelle: um -deg drehen, durch die Einpassung und
+     * zusaetzlich je Achse strecken:
+     *   u' = a*X + b*Y, v' = a*Y - b*X   (a = cos/sc, b = sin/sc)
+     *   u  = u' * sx/100, v = v' * sy/100
+     * 100 % = unveraendert, 200 % = doppelt so breit/hoch auf dem Schirm
+     * (Bild laeuft dabei ueber den Rand), 50 % = halb so breit/hoch. */
+    int cos16 = (int)(cf * FP);
+    int sin16 = (int)(sf * FP);
+    int a = (int)(((int64_t)cos16 * FP) / s_fp);   /* cos/sc */
+    int b = (int)(((int64_t)sin16 * FP) / s_fp);   /* sin/sc */
+    int a1 = (int)(((int64_t)a * sx_pct) / 100);
+    int b1 = (int)(((int64_t)b * sx_pct) / 100);
+    int a2 = (int)(((int64_t)a * sy_pct) / 100);
+    int b2 = (int)(((int64_t)b * sy_pct) / 100);
+    int cx = sw / 2, cy = sh / 2;          /* Quellmitte (Drehpunkt) */
+    int hdw = dw / 2, hdh = dh / 2;        /* Mitte des Zielrahmens */
+
+    /* Verschiebung der Bildmitte um (ox,oy): Zielpixel (X,Y) zeigt den Quellpunkt
+     * von (X-ox, Y-oy) -> als Konstante in den Zeilenanfang einrechnen. */
+    int u0 = -a1 * ox - b1 * oy;
+    int v0 = b2 * ox - a2 * oy;
+
+    for (int yy = 0; yy < dh; yy++) {
+        int Y = yy - hdh;
+        /* X = -hdw (linker Rand) */
+        int fx = b1 * Y - a1 * hdw + u0;
+        int fy = a2 * Y + b2 * hdw + v0;
         uint16_t *dst = s_fb + (size_t)(dy + yy) * TFT_WIDTH + dx;
-        for (int xx = 0; xx < sw; xx++) {
-            int fx = xx - cx0;
-            int sx = ((cs * fx + sn * fy) >> 16) + cx0;
-            int sy = ((-sn * fx + cs * fy) >> 16) + cy0;
+        for (int xx = 0; xx < dw; xx++) {
+            int sx = (fx >> 16) + cx;
+            int sy = (fy >> 16) + cy;
             if (sx >= 0 && sx < sw && sy >= 0 && sy < sh)
                 dst[xx] = src[(size_t)sy * sw + sx];
             else
-                dst[xx] = 0x0000;   /* schwarz ausserhalb */
+                dst[xx] = 0x0000;
+            fx += a1;
+            fy -= b2;
         }
     }
 }

@@ -35,17 +35,22 @@ static const char *TAG = "s3lcd_ui";
 /* ------------------------------------------------------------------ */
 typedef struct {
     bool     horizontal;  /* false = vertikal, true = horizontal */
-    int      pos;         /* Position in % (x von links bzw. y von oben) */
-    int      angle;       /* Neigung in Grad (-45..45), Drehung um die Bildmitte */
+    int      pos;         /* Position in 1/4 % (0..400; x von links bzw. y von oben) */
+    int      angle;       /* Neigung in 1/4 Grad (-180..180 = -45.0..+45.0 Grad) */
     int      width;       /* Dicke in Pixel */
     uint16_t color;       /* RGB565 */
 } ui_line_t;
 
+/* Einheiten: Position 1/4 % und Winkel 1/4 Grad - feiner als ganze Prozent
+ * bzw. Grad, damit sich die Linien praezise ausrichten lassen. */
+#define UI_POS_MAX   400            /* = 100.00 % */
+#define UI_ANG_MAX   180            /* = 45.00 Grad */
+
 #define UI_NLINES 3
 static ui_line_t s_lines[UI_NLINES] = {
-    { false, 85, 0, 3, 0xF800 },   /* rot:   vertikal  -> rechte Grenze  */
-    { true,  12, 0, 3, 0xFFE0 },   /* gelb:  horizontal -> obere Grenze  */
-    { false, 50, 0, 3, 0x07E0 },   /* gruen: vertikal  -> Mitte          */
+    { false, 340, 0, 3, 0xF800 },   /* rot:   vertikal   -> rechte Grenze (85.00 %) */
+    { true,   48, 0, 3, 0xFFE0 },   /* gelb:  horizontal -> obere Grenze  (12.00 %) */
+    { false, 200, 0, 3, 0x07E0 },   /* gruen: vertikal   -> Mitte         (50.00 %) */
 };
 
 /* ------------------------------------------------------------------ */
@@ -59,16 +64,18 @@ static ui_state_t s_state = UI_IDLE;
 typedef enum {
     MOD_ROT, MOD_GRUEN, MOD_GELB,
     MOD_DROT, MOD_DGRUEN, MOD_DGELB,
-    MOD_BDREH, MOD_HELL, MOD_KONTRAST, MOD_RECONN, MOD_CAMRESET, MOD_COUNT
+    MOD_BDREH, MOD_STRECK, MOD_VERSCH, MOD_HELL, MOD_KONTRAST, MOD_RECONN, MOD_CAMRESET, MOD_COUNT
 } ui_mod_t;
 static const char *const mod_lbl[MOD_COUNT] = {   /* kurz: fuer den Button */
     "ROT", "GRUEN", "GELB",
     "DICKE ROT", "DICKE GRUEN", "DICKE GELB",
-    "DREH-BILD", "HELLIGKEIT", "KONTRAST", "VERBINDEN", "CAM-RESET" };
+    "DREH-BILD", "STRECKEN", "VERSCHIEBEN", "HELLIGKEIT", "KONTRAST", "VERBINDEN", "CAM-RESET" };
 static const char *const mod_desc[MOD_COUNT] = {  /* lang: Statuszeile */
     "ROT: X=pos, Y=dreh", "GRUEN: X=pos, Y=dreh", "GELB: X=pos, Y=dreh",
     "DICKE ROT: X", "DICKE GRUEN: X", "DICKE GELB: X",
-    "DREH-BILD: Y=drehen", "HELLIGKEIT: X=-/+", "KONTRAST: X=-/+",
+    "DREH-BILD: X=90 Grad, Y=fein", "STRECKEN: X=X%, Y=Y%",
+    "VERSCHIEBEN: X=quer, Y=hoch",
+    "HELLIGKEIT: X=-/+", "KONTRAST: X=-/+",
     "NEU VERBINDEN: antippen", "CAM-RESET: antippen" };
 
 /* Linienindex zu einem Modus (-1 = keine Linie) */
@@ -84,7 +91,11 @@ static int mod_line(int m)
 
 static int s_mod = MOD_ROT;
 static int s_active = 0;            /* aktive Linie (0=rot,1=gelb,2=gruen) */
-static int s_imgdeg = 0;            /* Bild-Rotation 0..359 */
+static int s_imgdeg = 0;            /* Bild-Rotation in 1/10 Grad (0..3599) */
+static int s_strx = 100;            /* Streckung X in % (50..200) */
+static int s_stry = 100;            /* Streckung Y in % (50..200) */
+static int s_offx = 0;              /* Verschiebung X in px (-OFF_X_MAX..OFF_X_MAX) */
+static int s_offy = 0;              /* Verschiebung Y in px (-OFF_Y_MAX..OFF_Y_MAX) */
 static int s_bri = 0;               /* CAM-Helligkeit (-2..2) */
 static int s_con = 0;               /* CAM-Kontrast (-2..2) */
 
@@ -99,12 +110,18 @@ static int  s_warm = 0;             /* Warmlauf-Samples nach dem Aufsetzen */
 static int64_t s_last_redraw = 0;   /* Drossel fuer Zwischen-Redraws */
 static bool s_dirty = false;        /* Wert seit der Auswahl geaendert? */
 static int64_t s_idle_at = 0;       /* Timeout in den Normalbetrieb (0 = aus) */
+static int64_t s_hold_at = 0;       /* Menue oeffnen um diese Zeit (0 = kein Halten) */
 static bool s_cam_zero = false;     /* CAM-Bildparameter neutralisiert? */
 
 /* Achsenwahl: erst ab dieser Strecke wird ausgewertet (Totzone gegen Zittern),
  * bei unklarer Richtung erst ab GEST_FORCE. */
 #define GEST_DEADZONE 12
 #define GEST_FORCE    60
+
+/* Grenzen der Bildverschiebung: die Bildmitte darf bis an den Rand des
+ * Videobereichs wandern. */
+#define OFF_X_MAX  ((TFT_WIDTH - UI_LEFT_W) / 2)
+#define OFF_Y_MAX  (TFT_HEIGHT / 2)
 
 static char s_status[48] = "";
 static int64_t s_status_until = 0;
@@ -117,14 +134,27 @@ static void ui_lines_load(void)
     nvs_handle_t h;
     if (nvs_open("s3lcd_ui", NVS_READONLY, &h) != ESP_OK) return;
     uint8_t v;
-    static const char *pk[UI_NLINES] = { "l0p", "l1p", "l2p" };
-    static const char *wk[UI_NLINES] = { "l0w", "l1w", "l2w" };
-    static const char *ak[UI_NLINES] = { "l0a", "l1a", "l2a" };
-    static const char *hk[UI_NLINES] = { "l0h", "l1h", "l2h" };
+    uint16_t w;
+    /* Neue, feinere Keys (1/4 % / 1/4 Grad); alte Keys (ganze % / Grad)
+     * werden als Fallback uebernommen und umgerechnet. */
+    static const char *pk2[UI_NLINES] = { "l0p2", "l1p2", "l2p2" };
+    static const char *ak2[UI_NLINES] = { "l0a2", "l1a2", "l2a2" };
+    static const char *pk[UI_NLINES]  = { "l0p", "l1p", "l2p" };
+    static const char *wk[UI_NLINES]  = { "l0w", "l1w", "l2w" };
+    static const char *ak[UI_NLINES]  = { "l0a", "l1a", "l2a" };
+    static const char *hk[UI_NLINES]  = { "l0h", "l1h", "l2h" };
     for (int i = 0; i < UI_NLINES; i++) {
-        if (nvs_get_u8(h, pk[i], &v) == ESP_OK && v <= 100) s_lines[i].pos = v;
+        if (nvs_get_u16(h, pk2[i], &w) == ESP_OK && w <= UI_POS_MAX) {
+            s_lines[i].pos = (int)w;
+        } else if (nvs_get_u8(h, pk[i], &v) == ESP_OK && v <= 100) {
+            s_lines[i].pos = (int)v * 4;          /* ganze % -> 1/4 % */
+        }
+        if (nvs_get_u16(h, ak2[i], &w) == ESP_OK && w <= 2 * UI_ANG_MAX) {
+            s_lines[i].angle = (int)w - UI_ANG_MAX;
+        } else if (nvs_get_u8(h, ak[i], &v) == ESP_OK && v <= 90) {
+            s_lines[i].angle = ((int)v - 45) * 4; /* ganze Grad -> 1/4 Grad */
+        }
         if (nvs_get_u8(h, wk[i], &v) == ESP_OK && v >= 1 && v <= 15) s_lines[i].width = v;
-        if (nvs_get_u8(h, ak[i], &v) == ESP_OK) s_lines[i].angle = (int)v - 45; /* 0..90 -> -45..45 */
         if (nvs_get_u8(h, hk[i], &v) == ESP_OK) s_lines[i].horizontal = (v != 0);
     }
     nvs_close(h);
@@ -134,14 +164,14 @@ void ui_lines_save(void)
 {
     nvs_handle_t h;
     if (nvs_open("s3lcd_ui", NVS_READWRITE, &h) != ESP_OK) return;
-    static const char *pk[UI_NLINES] = { "l0p", "l1p", "l2p" };
-    static const char *wk[UI_NLINES] = { "l0w", "l1w", "l2w" };
-    static const char *ak[UI_NLINES] = { "l0a", "l1a", "l2a" };
-    static const char *hk[UI_NLINES] = { "l0h", "l1h", "l2h" };
+    static const char *pk2[UI_NLINES] = { "l0p2", "l1p2", "l2p2" };
+    static const char *ak2[UI_NLINES] = { "l0a2", "l1a2", "l2a2" };
+    static const char *wk[UI_NLINES]  = { "l0w", "l1w", "l2w" };
+    static const char *hk[UI_NLINES]  = { "l0h", "l1h", "l2h" };
     for (int i = 0; i < UI_NLINES; i++) {
-        nvs_set_u8(h, pk[i], (uint8_t)s_lines[i].pos);
+        nvs_set_u16(h, pk2[i], (uint16_t)s_lines[i].pos);
+        nvs_set_u16(h, ak2[i], (uint16_t)(s_lines[i].angle + UI_ANG_MAX));
         nvs_set_u8(h, wk[i], (uint8_t)s_lines[i].width);
-        nvs_set_u8(h, ak[i], (uint8_t)(s_lines[i].angle + 45)); /* -45..45 -> 0..90 */
         nvs_set_u8(h, hk[i], s_lines[i].horizontal ? 1 : 0);
     }
     /* Bildparameter (client-seitig) mitspeichern */
@@ -152,28 +182,47 @@ void ui_lines_save(void)
     ESP_LOGI(TAG, "Linien gespeichert");
 }
 
-/* Helligkeit/Kontrast (client-seitig) aus NVS laden und anwenden */
+/* Bildparameter (Helligkeit/Kontrast/Rotationswinkel) aus NVS laden */
 static void ui_pic_load(void)
 {
     nvs_handle_t h;
     uint8_t v;
+    uint16_t d;
     if (nvs_open("s3lcd_ui", NVS_READONLY, &h) == ESP_OK) {
         if (nvs_get_u8(h, "bri", &v) == ESP_OK && v <= 4) s_bri = (int)v - 2;
         if (nvs_get_u8(h, "con", &v) == ESP_OK && v <= 4) s_con = (int)v - 2;
+        /* Bilddrehung in 1/10 Grad (0..3599) - ueberlebt Reboots */
+        if (nvs_get_u16(h, "deg10", &d) == ESP_OK && d < 3600) s_imgdeg = (int)d;
+        /* Streckung in % (50..200) */
+        if (nvs_get_u16(h, "sx", &d) == ESP_OK && d >= 50 && d <= 200) s_strx = (int)d;
+        if (nvs_get_u16(h, "sy", &d) == ESP_OK && d >= 50 && d <= 200) s_stry = (int)d;
+        /* Verschiebung der Bildmitte in px */
+        int16_t s16;
+        if (nvs_get_i16(h, "ox", &s16) == ESP_OK &&
+            s16 >= -OFF_X_MAX && s16 <= OFF_X_MAX) s_offx = (int)s16;
+        if (nvs_get_i16(h, "oy", &s16) == ESP_OK &&
+            s16 >= -OFF_Y_MAX && s16 <= OFF_Y_MAX) s_offy = (int)s16;
         nvs_close(h);
     }
     stream_set_picture(s_bri, s_con);
 }
 
-/* Helligkeit/Kontrast in NVS sichern */
+/* Bildparameter in NVS sichern */
 static void ui_pic_save(void)
 {
     nvs_handle_t h;
     if (nvs_open("s3lcd_ui", NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_u8(h, "bri", (uint8_t)(s_bri + 2));
     nvs_set_u8(h, "con", (uint8_t)(s_con + 2));
+    nvs_set_u16(h, "deg10", (uint16_t)s_imgdeg);
+    nvs_set_u16(h, "sx", (uint16_t)s_strx);
+    nvs_set_u16(h, "sy", (uint16_t)s_stry);
+    nvs_set_i16(h, "ox", (int16_t)s_offx);
+    nvs_set_i16(h, "oy", (int16_t)s_offy);
     nvs_commit(h);
     nvs_close(h);
+    ESP_LOGI(TAG, "Bildparameter gespeichert (Helligkeit %d, Kontrast %d, Dreh %d.%d, Streck %d%%/%d%%, Versatz %+d/%+d px)",
+             s_bri, s_con, s_imgdeg / 10, s_imgdeg % 10, s_strx, s_stry, s_offx, s_offy);
 }
 
 /* ------------------------------------------------------------------ */
@@ -182,15 +231,20 @@ static void ui_pic_save(void)
 /* Statuszeile oben (Bildschirm wird durch das Raster nicht ueberdeckt) */
 #define STATUS_H   18
 
-/* Funktions-Raster: 4x3 gleich grosse Buttons ueber den ganzen Bildschirm */
-#define GRID_COLS  4
+/* Funktions-Raster: 5x3 gleich grosse Buttons ueber den ganzen Bildschirm */
+#define GRID_COLS  5
 #define GRID_ROWS  3
 #define GRID_CW    (TFT_WIDTH / GRID_COLS)
 #define GRID_CH    ((TFT_HEIGHT - STATUS_H) / GRID_ROWS)
 #define GRID_PAD   3
+#define GRID_NONE  (-2)             /* leere Rasterzelle */
 
 /* Zeit ohne Touch im Justier-Modus -> speichern + normales Videobild */
-#define IDLE_TIMEOUT_MS 5000
+#define IDLE_TIMEOUT_MS 3000
+
+/* Das Funktionsraster oeffnet erst, wenn der Finger so lange auf dem Videobild
+ * liegen bleibt - einfaches Antippen/Streifen oeffnet nichts (Fehlberuehrung). */
+#define MENU_HOLD_MS 2000
 
 /* Button mit zweiter Zeile (Bedienhinweis) */
 static void ui_draw_button2(int x, int y, int w, int h, const char *label,
@@ -221,12 +275,15 @@ static const ui_gridbtn_t s_gridbtn[GRID_COLS * GRID_ROWS] = {
     { "DICKE ROT",   "X=dicke",      MOD_DROT },
     { "DICKE GRUEN", "X=dicke",      MOD_DGRUEN },
     { "DICKE GELB",  "X=dicke",      MOD_DGELB },
-    { "DREH-BILD",   "Y=drehen",     MOD_BDREH },
+    { "DREH-BILD",   "X=90  Y=fein",  MOD_BDREH },
+    { "STRECKEN",    "X=X%  Y=Y%",   MOD_STRECK },
+    { "VERSCHIEBEN", "X=quer Y=hoch", MOD_VERSCH },
     { "HELLIGKEIT",  "X=-/+",        MOD_HELL },
     { "KONTRAST",    "X=-/+",        MOD_KONTRAST },
     { "VERBINDEN",   "antippen",     MOD_RECONN },
     { "CAM-RESET",   "antippen",     MOD_CAMRESET },
     { "ENDE",        "zurueck",      -1 },
+    { "",            "",             GRID_NONE },
 };
 
 /* ------------------------------------------------------------------ */
@@ -236,12 +293,12 @@ static const ui_gridbtn_t s_gridbtn[GRID_COLS * GRID_ROWS] = {
  * geneigt um l->angle). */
 static void ui_draw_one_line(const ui_line_t *l, uint16_t col)
 {
-    float rad = l->angle * (float)M_PI / 180.0f;
+    float rad = (l->angle / 4.0f) * (float)M_PI / 180.0f;
     if (!l->horizontal) {
         /* vertikale Linie: Mittelpunkt (cx, H/2) IM VIDE0BEREICH (rechts der
          * UI-Spalte), Neigung um die Mitte. Oben/unten je 1/20 kuerzer, damit
          * die Linie nicht ueber den Bildinhalt hinausragt. */
-        int cx = UI_LEFT_W + (l->pos * (TFT_WIDTH - UI_LEFT_W - 1)) / 100;
+        int cx = UI_LEFT_W + (l->pos * (TFT_WIDTH - UI_LEFT_W - 1)) / UI_POS_MAX;
         int cy = TFT_HEIGHT / 2;
         int r  = (TFT_HEIGHT * 18) / 20;
         int x1 = cx - (int)(sinf(rad) * r / 2);
@@ -252,7 +309,7 @@ static void ui_draw_one_line(const ui_line_t *l, uint16_t col)
     } else {
         /* horizontale Linie: Mittelpunkt (W/2, cy), Neigung um die Mitte */
         int cx = TFT_WIDTH / 2;
-        int cy = (l->pos * (TFT_HEIGHT - 1)) / 100;
+        int cy = (l->pos * (TFT_HEIGHT - 1)) / UI_POS_MAX;
         int r  = TFT_WIDTH;
         int x1 = cx - (int)(cosf(rad) * r / 2);
         int y1 = cy - (int)(sinf(rad) * r / 2);
@@ -270,6 +327,7 @@ static void ui_draw_grid(void)
     for (int r = 0; r < GRID_ROWS; r++) {
         for (int c = 0; c < GRID_COLS; c++) {
             int i  = r * GRID_COLS + c;
+            if (s_gridbtn[i].mode == GRID_NONE) continue;   /* leere Zelle */
             int x  = c * GRID_CW + GRID_PAD;
             int y  = STATUS_H + r * GRID_CH + GRID_PAD;
             int w  = GRID_CW - 2 * GRID_PAD;
@@ -317,10 +375,32 @@ static void ui_redraw(void)
     display_unlock();
 }
 
-/* Aktueller Bild-Rotationswinkel (fuer den Stream) */
+/* Aktueller Bild-Rotationswinkel (1/10 Grad) fuer den Stream */
 int ui_get_img_deg(void)
 {
     return s_imgdeg;
+}
+
+/* Streckung in % (100 = wie aufgenommen) fuer den Stream */
+int ui_get_stretch_x(void)
+{
+    return s_strx;
+}
+
+int ui_get_stretch_y(void)
+{
+    return s_stry;
+}
+
+/* Verschiebung der Bildmitte in px fuer den Stream */
+int ui_get_offset_x(void)
+{
+    return s_offx;
+}
+
+int ui_get_offset_y(void)
+{
+    return s_offy;
 }
 
 /* CAM-Konfiguration remote senden; liefert den HTTP-Status (-1 = Fehler) */
@@ -418,7 +498,8 @@ static int ui_steps(int dpx, int per)
     return st;
 }
 
-/* Winkel in 1-Grad-Schritten: 2 px = 1 Grad. */
+/* Winkelschritt: 2 px Fingerweg = 1 Schritt. Die Einheit des Schritts legt der
+ * Aufrufer fest (1/4 Grad fuer Linien, 5 * 1/10 Grad fuer das Bild). */
 static int ui_deg_steps(int dpx)
 {
     s_ang += dpx;
@@ -435,14 +516,15 @@ static void ui_apply_x(int dpx)
     switch (s_mod) {
     case MOD_ROT:
     case MOD_GRUEN:
-    case MOD_GELB:      /* Position: 3 px = 1 % */
+    case MOD_GELB:      /* Position: 3 px = 1/4 % (1 % pro 12 px Fingerweg) */
         st = ui_steps(dpx, 3);
         if (st) {
             l->pos += st;
             if (l->pos < 0) l->pos = 0;
-            if (l->pos > 100) l->pos = 100;
+            if (l->pos > UI_POS_MAX) l->pos = UI_POS_MAX;
             s_dirty = true;
-            ui_set_status("Pos %s %d%%", mod_lbl[s_mod], l->pos);
+            ui_set_status("Pos %s %d.%02d%%", mod_lbl[s_mod],
+                          l->pos / 4, (l->pos % 4) * 25);
         }
         break;
     case MOD_DROT:
@@ -455,6 +537,34 @@ static void ui_apply_x(int dpx)
             if (l->width > 9) l->width = 9;
             s_dirty = true;
             ui_set_status("Dicke %s %d px", mod_lbl[s_mod], l->width);
+        }
+        break;
+    case MOD_BDREH:     /* Bilddrehung grob: 40 px = 90 Grad (fein mit Y) */
+        st = ui_steps(dpx, 40);
+        if (st) {
+            s_imgdeg = ((s_imgdeg + st * 900) % 3600 + 3600) % 3600;
+            s_dirty = true;
+            ui_set_status("Bild %d.%d Grad", s_imgdeg / 10, s_imgdeg % 10);
+        }
+        break;
+    case MOD_STRECK:    /* Streckung X: 4 px = 1 % (50..200 %) */
+        st = ui_steps(dpx, 4);
+        if (st) {
+            s_strx += st;
+            if (s_strx < 50) s_strx = 50;
+            if (s_strx > 200) s_strx = 200;
+            s_dirty = true;
+            ui_set_status("Strecken X %d%% Y %d%%", s_strx, s_stry);
+        }
+        break;
+    case MOD_VERSCH:    /* Verschieben X: 2 px Fingerweg = 1 px Bildversatz */
+        st = ui_steps(dpx, 2);
+        if (st) {
+            s_offx += st;
+            if (s_offx < -OFF_X_MAX) s_offx = -OFF_X_MAX;
+            if (s_offx >  OFF_X_MAX) s_offx =  OFF_X_MAX;
+            s_dirty = true;
+            ui_set_status("Versatz X %+d px  Y %+d px", s_offx, s_offy);
         }
         break;
     case MOD_HELL:      /* 60 px = 1 Stufe, CAM -2..2 */
@@ -484,24 +594,49 @@ static void ui_apply_x(int dpx)
     }
 }
 
-/* Y-Achse: drehen in 1-Grad-Schritten (2 px = 1 Grad). Finger hoch = gegen
- * den Uhrzeigersinn. */
+/* Y-Achse: drehen. Ein Schritt = 2 px Fingerweg; Linienwinkel in 1/4-Grad-
+ * Schritten, Bilddrehung in 1/2-Grad-Schritten. Finger hoch = gegen den
+ * Uhrzeigersinn. */
 static void ui_apply_y(int dpy)
 {
-    int ddeg = ui_deg_steps(dpy);
-    if (!ddeg) return;
+    if (s_mod == MOD_STRECK) {         /* Streckung Y: 4 px = 1 % */
+        int sy = ui_steps(dpy, 4);
+        if (!sy) return;
+        s_stry += sy;
+        if (s_stry < 50) s_stry = 50;
+        if (s_stry > 200) s_stry = 200;
+        s_dirty = true;
+        ui_set_status("Strecken X %d%% Y %d%%", s_strx, s_stry);
+        return;
+    }
+    if (s_mod == MOD_VERSCH) {         /* Verschieben Y: 2 px = 1 px */
+        int sy = ui_steps(dpy, 2);
+        if (!sy) return;
+        s_offy += sy;
+        if (s_offy < -OFF_Y_MAX) s_offy = -OFF_Y_MAX;
+        if (s_offy >  OFF_Y_MAX) s_offy =  OFF_Y_MAX;
+        s_dirty = true;
+        ui_set_status("Versatz X %+d px  Y %+d px", s_offx, s_offy);
+        return;
+    }
+
+    int st = ui_deg_steps(dpy);
+    if (!st) return;
     s_dirty = true;
 
     if (s_mod == MOD_BDREH) {
-        /* positives deg = im Bild im Uhrzeigersinn -> hoch muss abziehen */
-        s_imgdeg = ((s_imgdeg + ddeg) % 360 + 360) % 360;
-        ui_set_status("Bild %d Grad", s_imgdeg);
+        /* positives deg = im Bild im Uhrzeigersinn -> hoch muss abziehen.
+         * s_imgdeg in 1/10 Grad, ein Schritt = 0.5 Grad = 5 Zehntel. */
+        s_imgdeg = ((s_imgdeg + st * 5) % 3600 + 3600) % 3600;
+        ui_set_status("Bild %d.%d Grad", s_imgdeg / 10, s_imgdeg % 10);
     } else if (mod_line(s_mod) >= 0) {
         ui_line_t *l = &s_lines[s_active];
-        l->angle -= ddeg;              /* hoch (dpy<0) -> Winkel + */
-        if (l->angle > 45) l->angle = 45;
-        if (l->angle < -45) l->angle = -45;
-        ui_set_status("Winkel %s %d Grad", mod_lbl[s_mod], l->angle);
+        l->angle -= st;                /* hoch (dpy<0) -> Winkel + */
+        if (l->angle > UI_ANG_MAX) l->angle = UI_ANG_MAX;
+        if (l->angle < -UI_ANG_MAX) l->angle = -UI_ANG_MAX;
+        int a = (l->angle < 0) ? -l->angle : l->angle;
+        ui_set_status("Winkel %s %s%d.%02d Grad", mod_lbl[s_mod],
+                      (l->angle < 0) ? "-" : "", a / 4, (a % 4) * 25);
     }
 }
 
@@ -602,6 +737,8 @@ static void ui_grid_press(int idx, int x, int y)
 {
     int m = s_gridbtn[idx].mode;
 
+    if (m == GRID_NONE) return;        /* leere Zelle */
+
     if (m < 0) {                       /* ENDE -> normales Videobild */
         s_state = UI_IDLE;
         ui_redraw();
@@ -645,10 +782,10 @@ static void ui_grid_press(int idx, int x, int y)
 static void ui_touch_down(int x, int y)
 {
     if (s_state == UI_IDLE) {
-        /* Tippen aufs Bild -> Funktionsauswahl (dieser Touch oeffnet nur) */
-        s_state = UI_MENU;
-        ui_set_status("Funktion waehlen");
-        ui_redraw();
+        /* Bildschirm beruehrt -> erst MERKEN. Das Raster geht nur auf, wenn der
+         * Finger MENU_HOLD_MS liegen bleibt (ui_task); diese Beruehrung oeffnet
+         * nur, sie wertet keinen Button aus. */
+        s_hold_at = esp_timer_get_time() + (int64_t)MENU_HOLD_MS * 1000;
         return;
     }
 
@@ -714,6 +851,20 @@ static void ui_task(void *arg)
             }
         }
 
+        /* Halten im Normalbetrieb: Raster erst nach MENU_HOLD_MS oeffnen.
+         * Wird vorher losgelassen, passiert gar nichts. */
+        if (s_hold_at) {
+            if (!s_prev_down) {
+                s_hold_at = 0;             /* zu kurz getippt -> kein Menue */
+            } else if (esp_timer_get_time() >= s_hold_at) {
+                s_hold_at = 0;
+                s_state = UI_MENU;
+                ESP_LOGI(TAG, "Menue geoeffnet (%d ms Halten)", MENU_HOLD_MS);
+                ui_set_status("Funktion waehlen");
+                ui_redraw();
+            }
+        }
+
         /* Justier-Modus: 5 s ohne Touch -> speichern (falls geaendert) und
          * wieder das normale Videobild zeigen */
         if (s_state == UI_ADJUST && !s_gest && s_idle_at &&
@@ -751,9 +902,11 @@ void ui_start(void)
     s_rem = 0; s_ang = 0;
     s_dirty = false;
     s_idle_at = 0;
+    s_hold_at = 0;
     s_last_redraw = 0;
     s_status_until = 0;
     xTaskCreate(ui_task, "ui", 4096, NULL, 6, NULL);
-    ESP_LOGI(TAG, "UI gestartet (Funktionsraster %dx%d, %d Linien, Helligkeit %d, Kontrast %d)",
-             GRID_COLS, GRID_ROWS, UI_NLINES, s_bri, s_con);
+    ESP_LOGI(TAG, "UI gestartet (Funktionsraster %dx%d, %d Linien, Helligkeit %d, Kontrast %d, Dreh %d.%d, Streck %d%%/%d%%, Versatz %+d/%+d px)",
+             GRID_COLS, GRID_ROWS, UI_NLINES, s_bri, s_con, s_imgdeg / 10, s_imgdeg % 10,
+             s_strx, s_stry, s_offx, s_offy);
 }

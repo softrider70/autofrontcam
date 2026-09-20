@@ -275,15 +275,29 @@ static void show_jpeg(const uint8_t *jpeg, size_t len)
         int x = UI_LEFT_W + (vw - img.width) / 2;
         int y = (TFT_HEIGHT - img.height) / 2;
         /* Videobereich zuerst schwarz (verhindert Geister der Rotation) */
-        display_fill_rect(UI_LEFT_W, 0, TFT_WIDTH - UI_LEFT_W, TFT_HEIGHT, 0x0000);
-        /* Ggf. um den Bild-Rotationswinkel drehen (Kamera-Ausrichtung) */
-        display_blit_rotated(out, img.width, img.height, x, y, ui_get_img_deg());
+        display_fill_rect(UI_LEFT_W, 0, vw, TFT_HEIGHT, 0x0000);
+        /* Ggf. drehen/strecken (Kamera-Ausrichtung + Keystone-Ausgleich).
+         * Die Einpassung beim Drehen verhindert ein fast schwarzes Bild. */
+        int deg = ui_get_img_deg();
+        int sx = ui_get_stretch_x();
+        int sy = ui_get_stretch_y();
+        int ox = ui_get_offset_x();
+        int oy = ui_get_offset_y();
+        if (deg == 0 && sx == 100 && sy == 100 && ox == 0 && oy == 0) {
+            display_blit(out, x, y, img.width, img.height);
+        } else {
+            display_blit_rot_fit(out, img.width, img.height,
+                                 UI_LEFT_W, 0, vw, TFT_HEIGHT, deg, sx, sy, ox, oy);
+        }
         static int64_t last_log = 0;
         int64_t now = esp_timer_get_time();
         if (now - last_log > 2000000) {
-            ESP_LOGI(TAG, "Frame angezeigt: %ux%u (JPEG %u B, Scale %d, Dreh %d Grad)",
+            int dg = ui_get_img_deg();
+            ESP_LOGI(TAG, "Frame angezeigt: %ux%u (JPEG %u B, Scale %d, Dreh %d.%d Grad, Streck %d%%/%d%%, Versatz %+d/%+d px)",
                      (unsigned)img.width, (unsigned)img.height,
-                     (unsigned)len, (int)scale, ui_get_img_deg());
+                     (unsigned)len, (int)scale, dg / 10, dg % 10,
+                     ui_get_stretch_x(), ui_get_stretch_y(),
+                     ui_get_offset_x(), ui_get_offset_y());
             last_log = now;
         }
     } else if (de != ESP_OK) {

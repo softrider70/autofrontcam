@@ -5,8 +5,11 @@ idf_component_register(
         touch.c
         stream.c
         ui.c
+        splash.c
     INCLUDE_DIRS
         ${CMAKE_SOURCE_DIR}/include
+    EMBED_FILES
+        splash.jpg
     REQUIRES
         esp_driver_spi
         esp_driver_gpio

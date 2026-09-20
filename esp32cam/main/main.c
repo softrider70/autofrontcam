@@ -133,30 +133,61 @@ static esp_err_t capture_handler(httpd_req_t *req)
 #define STREAM_TCP_PORT   8080
 #define STREAM_TASK_STACK 4096
 
+/* =====================================================================
+ * Gesundheits-Ampel des Streams (vom Watchdog passiv mitgelesen)
+ *
+ * Bewusst KEINE Testverbindung auf Port 8080: ein Loopback-Connect wuerde
+ * als "Client" angenommen, Frames ausloesen und TIME_WAIT-PCBs verbrauchen.
+ * Der Watchdog liest stattdessen, was der Stream-Task selbst meldet.
+ * ===================================================================== */
+static volatile bool     s_stream_listening   = false;  /* Listener steht */
+static volatile bool     s_stream_has_client  = false;  /* Client verbunden */
+static volatile int      s_stream_fd          = -1;     /* aktiver Socket */
+static volatile int64_t  s_stream_progress_us = 0;      /* letzter Fortschritt */
+static volatile uint32_t s_stream_frames      = 0;      /* gesendete Frames */
+static volatile uint32_t s_stream_bad_frames  = 0;      /* unbrauchbare Frames in Folge */
+static volatile uint32_t s_stream_alloc_err   = 0;      /* PSRAM-Kopie fehlt */
+
+/* Listener aufbauen; blockiert, bis er steht (mit Retry). Frueher beendete
+ * sich der Task bei socket/bind/listen-Fehler per vTaskDelete - bei einer
+ * verbauten CAM waere der Stream dann dauerhaft tot. */
+static int stream_listener_open(void)
+{
+    for (;;) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) {
+            ESP_LOGE(TAG, "Stream-Socket fehlgeschlagen");
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
+        }
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        struct sockaddr_in saddr = {
+            .sin_family = AF_INET,
+            .sin_addr.s_addr = htonl(INADDR_ANY),
+            .sin_port = htons(STREAM_TCP_PORT),
+        };
+        if (bind(fd, (struct sockaddr *)&saddr, sizeof(saddr)) != 0) {
+            ESP_LOGE(TAG, "Stream-Bind fehlgeschlagen (Port %d)", STREAM_TCP_PORT);
+            close(fd);
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
+        }
+        if (listen(fd, 1) != 0) {
+            ESP_LOGE(TAG, "Stream-Listen fehlgeschlagen");
+            close(fd);
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
+        }
+        return fd;
+    }
+}
+
 static void stream_task(void *arg)
 {
-    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd < 0) {
-        ESP_LOGE(TAG, "Stream-Socket fehlgeschlagen");
-        vTaskDelete(NULL);
-    }
-    int one = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    struct sockaddr_in saddr = {
-        .sin_family = AF_INET,
-        .sin_addr.s_addr = htonl(INADDR_ANY),
-        .sin_port = htons(STREAM_TCP_PORT),
-    };
-    if (bind(listen_fd, (struct sockaddr *)&saddr, sizeof(saddr)) != 0) {
-        ESP_LOGE(TAG, "Stream-Bind fehlgeschlagen (Port %d)", STREAM_TCP_PORT);
-        close(listen_fd);
-        vTaskDelete(NULL);
-    }
-    if (listen(listen_fd, 1) != 0) {
-        ESP_LOGE(TAG, "Stream-Listen fehlgeschlagen");
-        close(listen_fd);
-        vTaskDelete(NULL);
-    }
+    int listen_fd = stream_listener_open();
+    s_stream_listening = true;
+    s_stream_progress_us = esp_timer_get_time();
     ESP_LOGI(TAG, "Roh-JPEG-Stream bereit auf Port %d", STREAM_TCP_PORT);
 
     while (1) {
@@ -166,6 +197,9 @@ static void stream_task(void *arg)
             continue;
         }
         ESP_LOGI(TAG, "Stream-Client verbunden (Port %d)", STREAM_TCP_PORT);
+        s_stream_has_client = true;
+        s_stream_fd = sock;
+        s_stream_progress_us = esp_timer_get_time();
 
         /* Robustheit: Ohne SO_SNDTIMEO blockiert send() beliebig lange, wenn der
          * Client weg ist (halb-offene Verbindung, z.B. nach einem Reset des
@@ -186,10 +220,12 @@ static void stream_task(void *arg)
             uint8_t *jpeg = NULL;
             size_t len = 0;
             if (camera_capture_jpeg(&jpeg, &len) != ESP_OK) {
+                s_stream_bad_frames++;
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
             if (!jpeg || len < 8) {
+                s_stream_bad_frames++;
                 camera_fb_return();
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
@@ -200,6 +236,7 @@ static void stream_task(void *arg)
              * beim CYD farbige Linien erzeugen -> verwerfen. */
             if (jpeg[0] != 0xFF || jpeg[1] != 0xD8 ||
                 jpeg[len - 2] != 0xFF || jpeg[len - 1] != 0xD9) {
+                s_stream_bad_frames++;
                 camera_fb_return();
                 continue;
             }
@@ -210,6 +247,7 @@ static void stream_task(void *arg)
             }
             camera_fb_return();
             if (!copy) {
+                s_stream_alloc_err++;
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
@@ -234,12 +272,21 @@ static void stream_task(void *arg)
             heap_caps_free(copy);
             if (sent == 0) break;   /* Client weg */
 
+            /* Ampel: ein Frame ist komplett raus -> Fortschritt melden */
+            s_stream_frames++;
+            s_stream_bad_frames = 0;
+            s_stream_alloc_err = 0;
+            s_stream_progress_us = esp_timer_get_time();
+
             /* Kleine Pause zwischen den Frames: Die dauerhafte Capture-Last
              * beim Stream (anders als /capture mit Pausen) kann beim Encodieren
              * vereinzelte Frames beschae digen (farbige Linien beim CYD). Eine
              * kurze Pause gibt dem Sensor/Encoder Zeit fuer saubere Frames. */
             vTaskDelay(pdMS_TO_TICKS(40));
         }
+        s_stream_has_client = false;
+        s_stream_fd = -1;
+        s_stream_progress_us = esp_timer_get_time();
         close(sock);
         ESP_LOGI(TAG, "Stream-Client getrennt");
     }
@@ -530,23 +577,41 @@ static void restart_wifi_ap(void)
 }
 
 /* =====================================================================
- * Self-Healing-Watchdog (Verbindungs-Monitor)
+ * Self-Healing-Watchdog
  *
- * Der CYD baut pro Frame eine NEUE TCP-Verbindung auf (kein Keep-Alive).
- * Jede geschlossene Verbindung bleibt als TIME_WAIT-PCB (2*MSL) bestehen.
- * Sind alle TCP-PCBs belegt, nimmt der Server keine neuen Verbindungen mehr
- * an -> "Failed to open a new connection" / "select() timeout" am CYD.
- * Da die CAM verbaut ist und nicht manuell resettet werden kann, heilt sich
- * das System hier selbst (Eskalation):
- *   1) lokaler Test-Connect auf Port 80 schlaegt fehl
- *   2) nach N Fehlschlaegen: httpd neu starten (PCBs/Verbindungen frei)
- *   3) haelt das an: WiFi/AP neu starten (esp_wifi_restart)
- *   4) weiterhin: kompletter Software-Reset (esp_restart)
+ * Die CAM ist verbaut und nicht erreichbar - sie muss sich selbst retten.
+ * Ueberwacht werden ALLE kritischen Dienste, jeweils mit sanfter Eskalation
+ * (erst nur die betroffene Komponente, ganz zuletzt Software-Reset):
+ *
+ *  1) HTTP-Server (Port 80): Loopback-Test-Connect
+ *     -> 2 Fehlschlaege: httpd neu starten (gibt TIME_WAIT-PCBs frei)
+ *     -> 4: WiFi/AP neu starten
+ *     -> 8: Software-Reset
+ *
+ *  2) Stream-Task (Port 8080): passiv ueber die Gesundheits-Ampel
+ *     (kein Test-Connect - der wuerde als Client angenommen und TIME_WAIT
+ *      verbrauchen). Listener fehlt ODER Client haengt >15 s ohne Frame
+ *     -> Socket per shutdown() schliessen (send() bricht ab, Task kommt zu
+ *        accept() zurueck), nach 3 Versuchen Software-Reset.
+ *
+ *  3) Kamera: aufeinanderfolgende Capture-Fehler (esp_camera_fb_get leer)
+ *     -> Treiber neu initialisieren (max 3x, 30 s Abstand), danach Reset.
+ *
+ * Der Watchdog greift nur ein, wenn ein Dienst wirklich ausfaellt - im
+ * Normalbetrieb ist er reines Mitlesen.
  * ===================================================================== */
 #define WATCHDOG_CHECK_MS        10000
 #define WATCHDOG_FAIL_SERVER     2      /* Fehlschlage bis Server-Neustart */
 #define WATCHDOG_FAIL_WIFI       4      /* Fehlschlage bis WiFi/AP-Neustart */
 #define WATCHDOG_FAIL_RESET      8      /* Fehlschlage bis Software-Reset */
+
+/* Stream/Kamera */
+#define STREAM_STALL_US          (15 * 1000 * 1000LL)  /* 15 s kein Frame */
+#define STREAM_FAIL_RESET        3      /* Stream-Probleme bis Software-Reset */
+#define STREAM_ALLOC_FAIL_MAX    200    /* verworfene Frames (PSRAM) bis Alarm */
+#define CAM_FAIL_RECOVER         50     /* Capture-Fehler in Folge -> Recovery */
+#define CAM_RECOVER_MAX          3      /* Recovers bis Software-Reset */
+#define CAM_RECOVER_COOLDOWN_US  (30 * 1000 * 1000LL)
 
 static bool server_connect_ok(void)
 {
@@ -564,9 +629,16 @@ static bool server_connect_ok(void)
 
 static void conn_watchdog_task(void *arg)
 {
-    int fails = 0;
+    int fails = 0;                 /* HTTP-Server (Port 80) */
+    int stream_fails = 0;          /* Stream-Task (Port 8080) */
+    int cam_recovers = 0;          /* durchgefuehrte Kamera-Recoveries */
+    int64_t cam_last_recover = 0;
+
     vTaskDelay(pdMS_TO_TICKS(3000));   /* Erst nach dem Start pruefen */
     while (1) {
+        int64_t now = esp_timer_get_time();
+
+        /* --- 1) HTTP-Server (Port 80) per Loopback erreichbar? --------- */
         if (server_connect_ok()) {
             fails = 0;
         } else {
@@ -577,11 +649,68 @@ static void conn_watchdog_task(void *arg)
             } else if (fails == WATCHDOG_FAIL_WIFI) {
                 restart_wifi_ap();
             } else if (fails >= WATCHDOG_FAIL_RESET) {
-                ESP_LOGE(TAG, "Watchdog: Selbstheilung erfolglos -> Software-Reset");
+                ESP_LOGE(TAG, "Watchdog: HTTP-Selbstheilung erfolglos -> Software-Reset");
                 vTaskDelay(pdMS_TO_TICKS(500));
                 esp_restart();
             }
         }
+
+        /* --- 2) Stream-Task (Port 8080): Fortschritt aus der Ampel ------- */
+        bool stream_bad = false;
+        if (!s_stream_listening) {
+            ESP_LOGW(TAG, "Watchdog: Stream-Listener fehlt");
+            stream_bad = true;
+        } else if (s_stream_has_client && s_stream_progress_us &&
+                   (now - s_stream_progress_us) > STREAM_STALL_US) {
+            ESP_LOGW(TAG, "Watchdog: Stream haengt (%.0f s ohne Frame) -> Socket schliessen",
+                     (double)(now - s_stream_progress_us) / 1e6);
+            int fd = s_stream_fd;
+            if (fd >= 0) {
+                shutdown(fd, SHUT_RDWR);   /* send() bricht ab -> Task zu accept() */
+            }
+            stream_bad = true;
+        } else if (s_stream_alloc_err > STREAM_ALLOC_FAIL_MAX) {
+            ESP_LOGW(TAG, "Watchdog: %u Frames verworfen (PSRAM voll)",
+                     (unsigned)s_stream_alloc_err);
+            stream_bad = true;
+        }
+
+        if (stream_bad) {
+            stream_fails++;
+            if (stream_fails >= STREAM_FAIL_RESET) {
+                ESP_LOGE(TAG, "Watchdog: Stream nicht heilbar -> Software-Reset");
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_restart();
+            }
+        } else {
+            stream_fails = 0;
+        }
+
+        /* --- 3) Kamera: dauerhafte Capture-/Frame-Fehler -> Sensor neu init ---
+         * Beide Faelle zaehlen: esp_camera_fb_get() leer ODER der Stream-Task
+         * bekommt keine brauchbaren JPEGs (TCP laeuft, aber kein Bild!). */
+        uint32_t cam_fails = camera_fail_streak();
+        if (s_stream_bad_frames > cam_fails) cam_fails = s_stream_bad_frames;
+
+        if (cam_fails >= CAM_FAIL_RECOVER) {
+            if (cam_recovers >= CAM_RECOVER_MAX) {
+                ESP_LOGE(TAG, "Watchdog: Kamera-Recovery erfolglos -> Software-Reset");
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_restart();
+            } else if ((now - cam_last_recover) > CAM_RECOVER_COOLDOWN_US) {
+                cam_recovers++;
+                cam_last_recover = now;
+                ESP_LOGW(TAG, "Watchdog: %u Fehler in Folge -> Kamera-Recovery (%d/%d)",
+                         (unsigned)cam_fails, cam_recovers, CAM_RECOVER_MAX);
+                if (camera_recover() == ESP_OK) {
+                    img_picture_apply();   /* Helligkeit/Kontrast/Nacht wieder setzen */
+                }
+            }
+            /* sonst: Abkuehlzeit abwarten (naechster Check) */
+        } else {
+            cam_recovers = 0;          /* laeuft wieder -> Zaehler zuruecksetzen */
+        }
+
         vTaskDelay(pdMS_TO_TICKS(WATCHDOG_CHECK_MS));
     }
 }

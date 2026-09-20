@@ -21,6 +21,7 @@
 #include "touch.h"
 #include "stream.h"
 #include "ui.h"
+#include "splash.h"
 
 static const char *TAG = "s3lcd_main";
 
@@ -37,7 +38,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(display_init());
     display_backlight(true);
-    display_test_pattern();
+    splash_show();          /* Bild statt Farb-Testmuster */
 
     esp_err_t tret = touch_init();
     if (tret != ESP_OK) {

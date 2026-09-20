@@ -33,10 +33,15 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color);
  * (high byte zuerst) auf den SPI gebracht. */
 void display_blit(const uint16_t *pixels, int x, int y, int w, int h);
 
-/* Bild um seinen Mittelpunkt um deg (0..359) drehen und an (dx,dy) in den
- * Framebuffer schreiben (Ecken schwarz) - fuer die Kamera-Ausrichtung. */
-void display_blit_rotated(const uint16_t *src, int sw, int sh,
-                          int dx, int dy, int deg);
+/* Bild um seinen Mittelpunkt um 'deg' Zehntelgrad (0..3599) drehen, in X/Y um
+ * sx/sy Prozent strecken (100 = unveraendert, 200 = doppelt so breit/hoch,
+ * fuer Keystone-Ausgleich), die Bildmitte um (ox,oy) Pixel verschieben und so
+ * einpassen, dass es in den Rahmen (dw x dh) passt. Beim Strecken/Verschieben
+ * darf das Bild ueber den Rand laufen; Ecken ausserhalb der Quelle werden
+ * schwarz. */
+void display_blit_rot_fit(const uint16_t *src, int sw, int sh,
+                          int dx, int dy, int dw, int dh, int deg,
+                          int sx_pct, int sy_pct, int ox, int oy);
 
 /* Zeichenfunktionen (fuer OSD/Kalibrierlinien/UI) */
 void display_draw_text(int x, int y, const char *text, uint16_t color, uint16_t bg);

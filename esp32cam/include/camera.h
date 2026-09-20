@@ -28,6 +28,14 @@ void camera_fb_return(void);
 /* Kamerastatus abfragen */
 bool camera_is_ready(void);
 
+/* Anzahl aufeinanderfolgender Capture-Fehler (0 = alles ok).
+ * Grundlage fuer die Kamera-Recovery des Watchdogs. */
+uint32_t camera_fail_streak(void);
+
+/* Kamera neu initialisieren (Selbstheilung, z.B. Sensor haengt).
+ * Bildparameter danach vom Aufrufer neu setzen (camera_set_picture). */
+esp_err_t camera_recover(void);
+
 /* Aktuelle Aufloesung und Qualitaet */
 void camera_get_info(char *out, size_t len);
 

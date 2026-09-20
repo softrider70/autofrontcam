@@ -9,6 +9,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_camera.h"
 #include "config.h"
@@ -16,8 +17,38 @@
 
 static const char *TAG = "CAM";
 
-static bool camera_ready = false;
-static camera_fb_t *fb = NULL;
+static bool camera_ready = false;static uint32_t s_fail_streak = 0;   /* aufeinanderfolgende Capture-Fehler */
+
+/* Grundeinstellungen des Sensors (auch nach einer Recovery anzuwenden) */
+static void sensor_apply_defaults(void)
+{
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) {
+        ESP_LOGW(TAG, "Sensor nicht gefunden, fahre mit Standard fort");
+        return;
+    }
+    /* Grundeinstellungen fuer Tag-Aufnahmen */
+    s->set_brightness(s, 0);
+    s->set_contrast(s, 0);
+    s->set_saturation(s, 0);
+    s->set_special_effect(s, 0);
+    s->set_whitebal(s, 1);
+    s->set_awb_gain(s, 1);
+    s->set_wb_mode(s, 0);
+    s->set_exposure_ctrl(s, 1);
+    s->set_aec2(s, 0);
+    s->set_ae_level(s, 0);
+    s->set_aec_value(s, 300);
+    s->set_gain_ctrl(s, 1);
+    s->set_agc_gain(s, 0);
+    s->set_gainceiling(s, (gainceiling_t)0);
+    s->set_bpc(s, 0);
+    s->set_wpc(s, 1);
+    s->set_hmirror(s, 0);
+    s->set_vflip(s, 0);
+    s->set_lenc(s, 1);
+    ESP_LOGI(TAG, "Kamera-Sensor konfiguriert");
+}static camera_fb_t *fb = NULL;
 static SemaphoreHandle_t cam_mutex = NULL;   /* schuetzt Frame-Zugriff (Stream/Capture) */
 
 /* ESP32-CAM (AI-Thinker) Sensor-Pin-Konfiguration */
@@ -68,33 +99,8 @@ esp_err_t camera_init(void)
     }
 
     camera_ready = true;
-
-    sensor_t *s = esp_camera_sensor_get();
-    if (s) {
-        /* Grundeinstellungen fuer Tag-Aufnahmen */
-        s->set_brightness(s, 0);
-        s->set_contrast(s, 0);
-        s->set_saturation(s, 0);
-        s->set_special_effect(s, 0);
-        s->set_whitebal(s, 1);
-        s->set_awb_gain(s, 1);
-        s->set_wb_mode(s, 0);
-        s->set_exposure_ctrl(s, 1);
-        s->set_aec2(s, 0);
-        s->set_ae_level(s, 0);
-        s->set_aec_value(s, 300);
-        s->set_gain_ctrl(s, 1);
-        s->set_agc_gain(s, 0);
-        s->set_gainceiling(s, (gainceiling_t)0);
-        s->set_bpc(s, 0);
-        s->set_wpc(s, 1);
-        s->set_hmirror(s, 0);
-        s->set_vflip(s, 0);
-        s->set_lenc(s, 1);
-        ESP_LOGI(TAG, "Kamera-Sensor konfiguriert");
-    } else {
-        ESP_LOGW(TAG, "Sensor nicht gefunden, fahre mit Standard fort");
-    }
+    s_fail_streak = 0;
+    sensor_apply_defaults();
 
     ESP_LOGI(TAG, "Kamera OV2640 initialisiert (JPEG)");
     return ESP_OK;
@@ -124,10 +130,12 @@ esp_err_t camera_capture_jpeg(uint8_t **buf, size_t *len)
 
     fb = esp_camera_fb_get();
     if (!fb) {
+        s_fail_streak++;
         ESP_LOGE(TAG, "Frame-Capture fehlgeschlagen");
         if (cam_mutex) xSemaphoreGive(cam_mutex);
         return ESP_ERR_TIMEOUT;
     }
+    s_fail_streak = 0;
 
     *buf = fb->buf;
     *len = fb->len;
@@ -143,6 +151,60 @@ void camera_fb_return(void)
 bool camera_is_ready(void)
 {
     return camera_ready;
+}
+
+/* Aufeinanderfolgende Capture-Fehler (fuer den Selbstheilungs-Watchdog) */
+uint32_t camera_fail_streak(void)
+{
+    return s_fail_streak;
+}
+
+/* Kamera-Recovery: Treiber/Sensor neu initialisieren. Wird vom Watchdog
+ * aufgerufen, wenn dauerhaft keine Frames mehr kommen (Sensor haengt).
+ * Die Bildparameter (Helligkeit/Kontrast/Nacht) setzt der Aufrufer danach. */
+esp_err_t camera_recover(void)
+{
+    ESP_LOGW(TAG, "Kamera-Recovery: Treiber neu initialisieren");
+    if (cam_mutex && xSemaphoreTake(cam_mutex, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Kamera-Recovery: Mutex belegt");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    camera_release_fb();
+    esp_err_t ret = esp_camera_deinit();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "esp_camera_deinit: %s", esp_err_to_name(ret));
+    }
+
+    /* Sensor wirklich zuruecksetzen: ohne Power-Cycle bleibt der OV2640 nach
+     * einer Software-Rueckkehr gern in einem undefinierten Zustand (dann kommen
+     * kaputte/leere Frames). PWDN ist nach dem Deinit frei -> selbst treiben. */
+#if CAM_PIN_PWDN >= 0
+    gpio_config_t pwdn = {
+        .pin_bit_mask = (1ULL << CAM_PIN_PWDN),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    if (gpio_config(&pwdn) == ESP_OK) {
+        gpio_set_level(CAM_PIN_PWDN, 1);   /* Sensor aus */
+        vTaskDelay(pdMS_TO_TICKS(150));
+        gpio_set_level(CAM_PIN_PWDN, 0);   /* Sensor an  */
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+#endif
+
+    ret = esp_camera_init(&cam_config);
+    if (ret != ESP_OK) {
+        camera_ready = false;
+        ESP_LOGE(TAG, "Kamera-Recovery fehlgeschlagen: %s", esp_err_to_name(ret));
+    } else {
+        camera_ready = true;
+        sensor_apply_defaults();
+    }
+    s_fail_streak = 0;
+
+    if (cam_mutex) xSemaphoreGive(cam_mutex);
+    ESP_LOGW(TAG, "Kamera-Recovery %s", ret == ESP_OK ? "ok" : "fehlgeschlagen");
+    return ret;
 }
 
 /* Bildparameter anwenden (Werte werden auf -2..2 begrenzt).

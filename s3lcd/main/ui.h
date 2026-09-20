@@ -33,5 +33,13 @@ void ui_set_rotation(int rotation);
 /* Vom Linien-Edit in NVS speichern (wird bei OK ausgeloest). */
 void ui_lines_save(void);
 
-/* Aktueller Bild-Rotationswinkel in Grad (0..359) fuer die Kamera-Ausrichtung. */
+/* Aktueller Bild-Rotationswinkel in 1/10 Grad (0..3599) fuer die Kamera-Ausrichtung. */
 int ui_get_img_deg(void);
+
+/* Streckung in % (100 = wie aufgenommen, 50..200) - Keystone-Ausgleich. */
+int ui_get_stretch_x(void);
+int ui_get_stretch_y(void);
+
+/* Verschiebung der Bildmitte in px (0 = zentriert). */
+int ui_get_offset_x(void);
+int ui_get_offset_y(void);
