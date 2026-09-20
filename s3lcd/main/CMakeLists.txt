@@ -4,6 +4,7 @@ idf_component_register(
         display.c
         touch.c
         stream.c
+        ui.c
     INCLUDE_DIRS
         ${CMAKE_SOURCE_DIR}/include
     REQUIRES

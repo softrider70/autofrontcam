@@ -20,6 +20,7 @@
 #include "display.h"
 #include "touch.h"
 #include "stream.h"
+#include "ui.h"
 
 static const char *TAG = "s3lcd_main";
 
@@ -68,6 +69,8 @@ void app_main(void)
 #else
     /* Display-Client-Betrieb (Kamerabild von der ESP32-CAM) */
     display_fill(0x0000);
+    display_commit();
+    ui_start();         /* Touch-UI (Linien/Menue) vor dem Stream starten */
     ESP_LOGI(TAG, "Starte Stream-Client...");
     stream_start();     /* blockiert */
 #endif

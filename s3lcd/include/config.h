@@ -59,6 +59,10 @@ extern "C" {
  * Farben sind Big-Endian-RGB565 (kein Byte-Swap noetig). */
 #define TFT_WIDTH           480
 #define TFT_HEIGHT          320
+
+/* Linke UI-Spalte (Rand-Buttons): Das Video wird um diesen Betrag nach rechts
+ * verschoben, damit die linken Buttons das Bild nicht verdecken. */
+#define UI_LEFT_W           56
 #define ST7796S_MADCTL      0x28     /* MV|BGR (Orientierungs-Sweep-Ergebnis) */
 #define ST7796S_INVERT      1       /* INVON (0x21) noetig (Farbsweep-Ergebnis) */
 

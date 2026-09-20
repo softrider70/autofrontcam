@@ -25,6 +25,7 @@
 #include "config.h"
 #include "display.h"
 #include "stream.h"
+#include "ui.h"
 
 static const char *TAG = "s3lcd_stream";
 static volatile bool s_ip_ok = false;
@@ -171,12 +172,14 @@ static void show_jpeg(const uint8_t *jpeg, size_t len)
         return;
     }
 
-    /* Groesste Reduktion waehlen, die ins 480x320-Display passt */
+    /* Groesste Reduktion waehlen, die in den Videobereich (nach der linken
+     * UI-Spalte) passt */
+    const int vw = TFT_WIDTH - UI_LEFT_W;
     int w = info.width, h = info.height;
     esp_jpeg_image_scale_t scale = JPEG_IMAGE_SCALE_0;
-    if (w > TFT_WIDTH || h > TFT_HEIGHT)        scale = JPEG_IMAGE_SCALE_1_2;
-    if (w / 2 > TFT_WIDTH || h / 2 > TFT_HEIGHT) scale = JPEG_IMAGE_SCALE_1_4;
-    if (w / 4 > TFT_WIDTH || h / 4 > TFT_HEIGHT) scale = JPEG_IMAGE_SCALE_1_8;
+    if (w > vw || h > TFT_HEIGHT)          scale = JPEG_IMAGE_SCALE_1_2;
+    if (w / 2 > vw || h / 2 > TFT_HEIGHT)  scale = JPEG_IMAGE_SCALE_1_4;
+    if (w / 4 > vw || h / 4 > TFT_HEIGHT)  scale = JPEG_IMAGE_SCALE_1_8;
     cfg.out_scale = scale;
 
     /* Ausgabepuffer in PSRAM (8 MB) - genug fuer 1:1 bis SVGA */
@@ -192,10 +195,14 @@ static void show_jpeg(const uint8_t *jpeg, size_t len)
     esp_jpeg_image_output_t img = { 0 };
     esp_err_t de = esp_jpeg_decode(&cfg, &img);
     if (de == ESP_OK && img.width > 0 && img.height > 0 &&
-        img.width <= TFT_WIDTH && img.height <= TFT_HEIGHT) {
-        int x = (TFT_WIDTH - img.width) / 2;
+        img.width <= vw && img.height <= TFT_HEIGHT) {
+        /* Nach rechts verschoben (linke UI-Spalte frei), vertikal zentriert */
+        int x = UI_LEFT_W + (vw - img.width) / 2;
         int y = (TFT_HEIGHT - img.height) / 2;
-        display_blit(out, x, y, img.width, img.height);
+        /* Videobereich zuerst schwarz (verhindert Geister der Rotation) */
+        display_fill_rect(UI_LEFT_W, 0, TFT_WIDTH - UI_LEFT_W, TFT_HEIGHT, 0x0000);
+        /* Ggf. um den Bild-Rotationswinkel drehen (Kamera-Ausrichtung) */
+        display_blit_rotated(out, img.width, img.height, x, y, ui_get_img_deg());
         static int64_t last_log = 0;
         int64_t now = esp_timer_get_time();
         if (now - last_log > 2000000) {
@@ -256,7 +263,11 @@ void stream_start(void)
             continue;
         }
         fails = 0;
-        show_jpeg(jpeg, len);
+        display_lock();
+        show_jpeg(jpeg, len);   /* dekodiert + zeichnet in Framebuffer */
+        ui_draw_overlay();      /* Linien/Buttons in Framebuffer */
+        display_commit();       /* Framebuffer 1x ans Panel */
+        display_unlock();
         frames++;
         if ((frames % 25) == 0) {
             int64_t dt = (esp_timer_get_time() - t0) / 1000;
