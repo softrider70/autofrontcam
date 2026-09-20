@@ -9,6 +9,8 @@ sdkconfig.old
 *.elf
 *.bin
 *.map
+build_log.txt
+**/build_log.txt
 
 # Komponenten aus der Component Registry (werden aus idf_component.yml generiert)
 managed_components/
