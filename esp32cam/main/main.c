@@ -167,6 +167,20 @@ static void stream_task(void *arg)
         }
         ESP_LOGI(TAG, "Stream-Client verbunden (Port %d)", STREAM_TCP_PORT);
 
+        /* Robustheit: Ohne SO_SNDTIMEO blockiert send() beliebig lange, wenn der
+         * Client weg ist (halb-offene Verbindung, z.B. nach einem Reset des
+         * Displays). Der Task kaeme dann nie zurueck zu accept() und Port 8080
+         * bliebe taub. Keepalive erkennt tote Clients zusaetzlich in ~10 s. */
+        struct timeval snd_to = { .tv_sec = 3, .tv_usec = 0 };
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+        int one_ka = 1;
+        setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &one_ka, sizeof(one_ka));
+        int ka_idle = 5, ka_intvl = 2, ka_cnt = 3;
+        setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &ka_idle, sizeof(ka_idle));
+        setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &ka_intvl, sizeof(ka_intvl));
+        setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &ka_cnt, sizeof(ka_cnt));
+        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one_ka, sizeof(one_ka));
+
         /* Frames senden, bis die Verbindung abbricht */
         while (1) {
             uint8_t *jpeg = NULL;
@@ -345,6 +359,17 @@ static esp_err_t api_config_post_handler(httpd_req_t *req)
     char tmp[16];
     line_cfg_t p_r, p_y, l_r, l_y;
     lines_get_dual(&p_r, &p_y, &l_r, &l_y);
+
+    /* Fern-Reset: Anforderung vom Display-Client (Modus "CAM-RESET").
+     * Antwort zuerst senden, dann neu starten. */
+    if (form_get(body, "reset", tmp, sizeof(tmp)) && atoi(tmp) != 0) {
+        ESP_LOGW(TAG, "Fern-Reset angefordert -> Neustart");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "RESTART", 7);
+        vTaskDelay(pdMS_TO_TICKS(300));
+        esp_restart();
+        return ESP_OK;
+    }
 
     if (form_get(body, "mode", tmp, sizeof(tmp)))
         voltage_set_mode(atoi(tmp) != 0);

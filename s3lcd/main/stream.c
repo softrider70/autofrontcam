@@ -30,6 +30,64 @@
 static const char *TAG = "s3lcd_stream";
 static volatile bool s_ip_ok = false;
 
+/* TCP-Socket des Roh-JPEG-Streams + Reconnect-Anforderung (Trigger aus der UI) */
+static int s_sock = -1;
+static volatile bool s_reconn_req = false;
+
+void stream_request_reconnect(void)
+{
+    s_reconn_req = true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Helligkeit/Kontrast client-seitig (64K-LUT in PSRAM)                */
+/* ------------------------------------------------------------------ */
+static uint16_t *s_lut = NULL;
+static int s_lut_bri = 0, s_lut_con = 0;
+
+void stream_set_picture(int bri, int con)
+{
+    if (bri < -2) bri = -2;
+    if (bri > 2)  bri = 2;
+    if (con < -2) con = -2;
+    if (con > 2)  con = 2;
+    if (s_lut && bri == s_lut_bri && con == s_lut_con) return;
+    if (!s_lut && bri == 0 && con == 0) {   /* nichts zu tun, LUT nicht bauen */
+        s_lut_bri = bri; s_lut_con = con;
+        return;
+    }
+
+    if (!s_lut) {
+        s_lut = heap_caps_malloc(65536 * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (!s_lut) {
+            ESP_LOGW(TAG, "Kein PSRAM fuer Bild-LUT - Helligkeit/Kontrast aus");
+            return;
+        }
+    }
+
+    /* Kontrast als Steigung um die Mitte, Helligkeit als Offset:
+     * con -2..2 -> 50..150 %, bri -2..2 -> -80..+80 */
+    int scale = 100 + con * 25;
+    int off   = bri * 40;
+    for (int i = 0; i < 65536; i++) {
+        int r = ((i >> 11) & 0x1F) * 255 / 31;
+        int g = ((i >> 5) & 0x3F) * 255 / 63;
+        int b = (i & 0x1F) * 255 / 31;
+        r = ((r - 128) * scale) / 100 + 128 + off;
+        g = ((g - 128) * scale) / 100 + 128 + off;
+        b = ((b - 128) * scale) / 100 + 128 + off;
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+        s_lut[i] = (uint16_t)(((r * 31 / 255) << 11) |
+                              ((g * 63 / 255) << 5) |
+                              (b * 31 / 255));
+    }
+    s_lut_bri = bri;
+    s_lut_con = con;
+    ESP_LOGI(TAG, "Bildparameter client-seitig: Helligkeit %d, Kontrast %d", bri, con);
+}
+
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -86,10 +144,18 @@ static void wifi_init_sta(void)
  * der Socket geschlossen und beim naechsten Aufruf neu verbunden. */
 static size_t fetch_frame_tcp(uint8_t *dst, size_t cap)
 {
-    static int sock = -1;
+    int sock = s_sock;
+
+    /* Reconnect angefordert (UI-Trigger "Neu verbinden")? */
+    if (s_reconn_req) {
+        s_reconn_req = false;
+        if (sock >= 0) { close(sock); sock = -1; s_sock = -1; }
+        ESP_LOGI(TAG, "Reconnect angefordert");
+    }
 
     if (sock < 0) {
         sock = socket(AF_INET, SOCK_STREAM, 0);
+        s_sock = sock;
         if (sock >= 0) {
             struct sockaddr_in sa;
             memset(&sa, 0, sizeof(sa));
@@ -98,6 +164,7 @@ static size_t fetch_frame_tcp(uint8_t *dst, size_t cap)
             if (inet_pton(AF_INET, CAM_HOST_DEFAULT, &sa.sin_addr) != 1) {
                 close(sock);
                 sock = -1;
+                s_sock = -1;
                 ESP_LOGE(TAG, "Ungueltige CAM-IP %s", CAM_HOST_DEFAULT);
                 return 0;
             }
@@ -108,6 +175,7 @@ static size_t fetch_frame_tcp(uint8_t *dst, size_t cap)
                          CAM_HOST_DEFAULT, STREAM_TCP_PORT);
                 close(sock);
                 sock = -1;
+                s_sock = -1;
                 return 0;
             }
             ESP_LOGI(TAG, "Stream verbunden: %s:%d", CAM_HOST_DEFAULT, STREAM_TCP_PORT);
@@ -148,7 +216,7 @@ static size_t fetch_frame_tcp(uint8_t *dst, size_t cap)
 
 stream_err:
     ESP_LOGW(TAG, "Stream-Fehler - Socket geschlossen (Reconnect)");
-    if (sock >= 0) { close(sock); sock = -1; }
+    if (sock >= 0) { close(sock); sock = -1; s_sock = -1; }
     return 0;
 }
 
@@ -196,6 +264,13 @@ static void show_jpeg(const uint8_t *jpeg, size_t len)
     esp_err_t de = esp_jpeg_decode(&cfg, &img);
     if (de == ESP_OK && img.width > 0 && img.height > 0 &&
         img.width <= vw && img.height <= TFT_HEIGHT) {
+        /* Helligkeit/Kontrast client-seitig anwenden (LUT, nur wenn gesetzt) */
+        if (s_lut && (s_lut_bri != 0 || s_lut_con != 0)) {
+            uint16_t *pp = out;
+            for (uint32_t n = 0; n < (uint32_t)img.width * img.height; n++) {
+                pp[n] = s_lut[pp[n]];
+            }
+        }
         /* Nach rechts verschoben (linke UI-Spalte frei), vertikal zentriert */
         int x = UI_LEFT_W + (vw - img.width) / 2;
         int y = (TFT_HEIGHT - img.height) / 2;
@@ -206,9 +281,9 @@ static void show_jpeg(const uint8_t *jpeg, size_t len)
         static int64_t last_log = 0;
         int64_t now = esp_timer_get_time();
         if (now - last_log > 2000000) {
-            ESP_LOGI(TAG, "Frame angezeigt: %ux%u (JPEG %u B, Scale %d)",
+            ESP_LOGI(TAG, "Frame angezeigt: %ux%u (JPEG %u B, Scale %d, Dreh %d Grad)",
                      (unsigned)img.width, (unsigned)img.height,
-                     (unsigned)len, (int)scale);
+                     (unsigned)len, (int)scale, ui_get_img_deg());
             last_log = now;
         }
     } else if (de != ESP_OK) {

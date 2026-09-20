@@ -107,6 +107,8 @@ esp_err_t touch_read_screen(touch_screen_t *p)
     esp_err_t ret = touch_read(&raw);
     if (ret != ESP_OK) return ret;
     p->touched = raw.touched;
+    p->rx = raw.raw_x;
+    p->ry = raw.raw_y;
     if (!raw.touched) return ESP_OK;
 
     /* 90°-Mapping, andere Drehrichtung (Cursor-Test 2026-09-08):

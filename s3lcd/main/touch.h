@@ -21,6 +21,8 @@ typedef struct {
     bool touched;
     int  x;         /* Display-Koordinate (0..TFT_WIDTH-1) */
     int  y;         /* Display-Koordinate (0..TFT_HEIGHT-1) */
+    int  rx;        /* Rohwert X des FT6336U (Diagnose) */
+    int  ry;        /* Rohwert Y des FT6336U (Diagnose) */
 } touch_screen_t;
 
 esp_err_t touch_init(void);

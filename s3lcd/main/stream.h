@@ -9,3 +9,10 @@
 
 /* Startet WiFi (Station) + Stream-Loop; blockiert (kehrt nicht zurueck). */
 void stream_start(void);
+
+/* Stream-Verbindung neu aufbauen lassen (Socket wird geschlossen, Reconnect). */
+void stream_request_reconnect(void);
+
+/* Helligkeit/Kontrast client-seitig setzen (-2..2). Wird auf das dekodierte
+ * Bild angewendet (LUT in PSRAM), damit die Wirkung garantiert sichtbar ist. */
+void stream_set_picture(int bri, int con);
