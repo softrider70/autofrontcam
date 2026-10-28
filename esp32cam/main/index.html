@@ -255,6 +255,11 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;color:v
 
   pollFrame();
 
+  /* Einmaliger Start-Hinweis, damit die Bedienung auffindbar ist. */
+  setTimeout(function(){
+    if(!menu.classList.contains('show'))showHint('Tippe auf das Bild, um das Menü zu öffnen',5000);
+  },1500);
+
   var cfg={voltage:0,mode:0,threshold:12.8,version:'',build:0,rot:0,bri:0,con:0,sat:0,night:0,
     portrait:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:1}},
     landscape:{red:{x:50,angle:0,w:3,on:1},yellow:{x:60,angle:0,w:3,on:1}}};
@@ -348,27 +353,43 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;color:v
     if(drag){drag=null;save();}
   }
 
-  var touchMoved=false;
-  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];var p=toCanvas(t.clientX,t.clientY);onStart(p.x,p.y);touchMoved=false;},{passive:false});
-  cv.addEventListener('touchmove',function(e){e.preventDefault();touchMoved=true;var t=e.touches[0];var p=toCanvas(t.clientX,t.clientY);onMove(p.x,p.y);},{passive:false});
-  cv.addEventListener('touchend',function(e){e.preventDefault();var wasDrag=!!drag;onEnd();if(!wasDrag&&!touchMoved){onTap();}},{passive:false});
+  var touchMoved=false,touchStartX=0,touchStartY=0,lastTouch=0;
+  cv.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];
+    touchStartX=t.clientX;touchStartY=t.clientY;touchMoved=false;
+    var p=toCanvas(t.clientX,t.clientY);onStart(p.x,p.y);},{passive:false});
+  cv.addEventListener('touchmove',function(e){e.preventDefault();var t=e.touches[0];
+    /* Erst ab 12 px gilt die Beruehrung als Wischen, nicht als Tap. */
+    if(Math.hypot(t.clientX-touchStartX,t.clientY-touchStartY)>12)touchMoved=true;
+    var p=toCanvas(t.clientX,t.clientY);onMove(p.x,p.y);},{passive:false});
+  cv.addEventListener('touchend',function(e){e.preventDefault();lastTouch=Date.now();
+    var wasDrag=!!drag;onEnd();
+    /* Menue geschlossen: jeder Tap oeffnet. Menue offen: nur ein Tap ohne Ziehen schliesst. */
+    if(!wasDrag&&(!touchMoved||!menu.classList.contains('show')))onTap();},{passive:false});
   cv.addEventListener('touchcancel',function(e){e.preventDefault();onEnd();},{passive:false});
   cv.addEventListener('mousedown',function(e){var p=toCanvas(e.clientX,e.clientY);onStart(p.x,p.y);});
   window.addEventListener('mousemove',function(e){if(drag){var p=toCanvas(e.clientX,e.clientY);onMove(p.x,p.y);}});
   window.addEventListener('mouseup',onEnd);
 
+  var hintTimer=null;
+  function showHint(text,ms){
+    hint.textContent=text;hint.style.display='block';
+    clearTimeout(hintTimer);
+    hintTimer=setTimeout(function(){hint.style.display='none';},ms);
+  }
   function onTap(){
     if(drag)return;
     if(menu.classList.contains('show')){
-      menu.classList.remove('show');hint.style.display='none';
+      menu.classList.remove('show');hint.style.display='none';clearTimeout(hintTimer);
     }else{
       menu.classList.add('show');
-      hint.style.display='block';
-      setTimeout(function(){hint.style.display='none';},2500);
+      showHint('Tippe daneben, um das Menü zu schließen',2500);
     }
     draw();
   }
-  cv.addEventListener('click',function(e){e.preventDefault();onTap();});
+  cv.addEventListener('click',function(e){e.preventDefault();
+    /* Nach einem Touch kein zweites Umschalten durch den synthetischen Klick. */
+    if(Date.now()-lastTouch<600)return;
+    onTap();});
   cv.addEventListener('keydown',function(e){
     if(e.key==='Enter'||e.key===' '){e.preventDefault();onTap();}
   });
