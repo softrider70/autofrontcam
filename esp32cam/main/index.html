@@ -2,106 +2,153 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Autofrontcam</title>
 <style>
-html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
-  font-family:Arial,sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
+:root{
+  --surface:rgba(20,20,22,0.80);
+  --surface-strong:rgba(20,20,22,0.94);
+  --stroke:rgba(255,255,255,0.22);
+  --content:#F5F5F7;
+  --content-2:#D1D1D6;
+  --accent:#0A84FF;
+  --accent-fill:#0066CC;
+  --red:#FF453A;
+  --yellow:#FFD60A;
+  --radius:14px;
+}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;color:var(--content);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  font-size:17px;line-height:1.35;-webkit-text-size-adjust:100%;
+  -webkit-user-select:none;user-select:none;touch-action:manipulation}
 #stream{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
-#ov{position:fixed;inset:0;width:100%;height:100%}
+#ov{position:fixed;inset:0;width:100%;height:100%;touch-action:none}
 #stage{position:fixed;inset:0;transform-origin:center center}
-#ver{position:fixed;top:10px;left:10px;color:#aaa;font:12px monospace;
-  text-shadow:0 0 4px #000;background:rgba(0,0,0,0.4);padding:3px 8px;border-radius:6px;
-  z-index:20;pointer-events:none}
-#volt{position:fixed;top:10px;right:10px;color:#0f0;font:bold 16px monospace;
-  text-shadow:0 0 4px #000;background:rgba(0,0,0,0.5);padding:5px 10px;border-radius:6px;
-  z-index:20;pointer-events:none}
-#hint{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);color:#ccc;
-  font:13px sans-serif;text-shadow:0 0 3px #000;background:rgba(0,0,0,0.5);
-  padding:5px 12px;border-radius:14px;z-index:20;pointer-events:none;display:none}
-#busy{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#ffcc00;
-  font:bold 18px sans-serif;text-align:center;text-shadow:0 0 6px #000;
-  background:rgba(0,0,0,0.75);padding:16px 24px;border:1px solid #ffcc00;
-  border-radius:12px;z-index:25;display:none;pointer-events:none}
+#ver,#volt{position:fixed;top:calc(10px + env(safe-area-inset-top));z-index:20;
+  pointer-events:none;background:var(--surface);border-radius:10px;padding:6px 10px;
+  text-shadow:0 1px 2px rgba(0,0,0,0.8)}
+#ver{left:calc(10px + env(safe-area-inset-left));color:var(--content-2);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:500}
+#volt{right:calc(10px + env(safe-area-inset-right));color:var(--content);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:17px;font-weight:600}
+#hint{position:fixed;bottom:calc(10px + env(safe-area-inset-bottom));left:50%;
+  transform:translateX(-50%);max-width:calc(100% - 32px);text-align:center;
+  color:var(--content);font-size:15px;background:var(--surface-strong);
+  padding:10px 16px;border-radius:20px;z-index:20;pointer-events:none;display:none}
+#busy{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  color:var(--content);font-size:17px;font-weight:600;text-align:center;
+  background:var(--surface-strong);padding:18px 24px;border:1px solid var(--stroke);
+  border-radius:var(--radius);z-index:25;display:none;pointer-events:none;
+  max-width:calc(100% - 48px)}
+#toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom));
+  transform:translateX(-50%);max-width:calc(100% - 32px);text-align:center;
+  background:var(--surface-strong);color:var(--content);padding:12px 18px;
+  border-radius:var(--radius);font-size:15px;z-index:30;display:none}
 #menu{position:fixed;inset:0;display:none;z-index:10}
 #menu.show{display:block}
-#ctrl{position:absolute;left:12px;top:50%;transform:translateY(-50%);
-  display:flex;flex-direction:column;gap:10px}
-.btn{width:56px;height:56px;font-size:26px;color:#fff;background:rgba(0,0,0,0.55);
-  border:1px solid rgba(255,255,255,0.45);border-radius:12px;display:flex;
-  align-items:center;justify-content:center;cursor:pointer}
-.btn:active{background:rgba(0,0,0,0.85)}
-#panel{position:absolute;right:12px;top:50%;transform:translateY(-50%);width:180px;
-  background:rgba(0,0,0,0.72);border:1px solid rgba(255,255,255,0.3);border-radius:12px;
-  padding:14px;color:#eee;font:13px sans-serif}
-#panel h3{margin:0 0 10px;font-size:14px;color:#ffd}
-#panel label{display:block;margin:8px 0 3px}
-#panel input[type=range]{width:100%}
-#panel select,#panel input[type=number]{width:100%;padding:4px;border-radius:4px;border:none;box-sizing:border-box}
-#panel .chk{display:flex;align-items:center;gap:6px;margin-top:10px}
-#otaBtn{position:absolute;left:12px;bottom:12px;padding:12px 20px;
-  background:rgba(40,120,220,0.85);color:#fff;border:none;border-radius:10px;
-  font-size:15px;cursor:pointer}
-#otaBtn:active{background:rgba(30,90,170,0.95)}
-#lineSel{display:flex;gap:6px;margin-bottom:8px}
-#lineSel button{flex:1;padding:6px;border-radius:6px;border:1px solid #555;
-  background:rgba(255,255,255,0.1);color:#ccc;font-size:12px;cursor:pointer}
-#lineSel button.active{background:#fff;color:#000}
+#ctrl{position:absolute;left:calc(12px + env(safe-area-inset-left));top:50%;
+  transform:translateY(-50%);display:flex;flex-direction:column;gap:12px}
+.btn{width:56px;height:56px;font-size:24px;color:var(--content);background:var(--surface);
+  border:1px solid var(--stroke);border-radius:var(--radius);display:flex;
+  align-items:center;justify-content:center;cursor:pointer;padding:0;
+  -webkit-tap-highlight-color:transparent}
+.btn:active{background:var(--surface-strong)}
+#panel{position:absolute;right:calc(12px + env(safe-area-inset-right));top:50%;
+  transform:translateY(-50%);width:min(280px,calc(100% - 96px));
+  max-height:calc(100% - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  touch-action:pan-y;background:var(--surface);border:1px solid var(--stroke);
+  border-radius:18px;padding:16px;color:var(--content);font-size:15px;
+  -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+#panel h3{margin:0 0 12px;font-size:17px;font-weight:600}
+#panel label{display:block;margin:12px 0 4px;color:var(--content-2);font-size:14px}
+#panel output{float:right;color:var(--content);font-weight:600;font-variant-numeric:tabular-nums}
+#panel input[type=range]{width:100%;touch-action:pan-y}
+#panel select,#panel input[type=number]{width:100%;padding:8px;border-radius:8px;
+  border:1px solid var(--stroke);background:rgba(255,255,255,0.08);color:var(--content);
+  font-size:16px;box-sizing:border-box}
+#panel .chk{display:flex;align-items:center;gap:10px;margin-top:14px;min-height:32px}
+#panel .chk label{margin:0;color:var(--content)}
+#otaBtn{position:absolute;left:calc(12px + env(safe-area-inset-left));
+  bottom:calc(12px + env(safe-area-inset-bottom));min-height:48px;padding:12px 20px;
+  background:var(--accent-fill);color:#fff;border:none;border-radius:12px;
+  font-size:17px;font-weight:600;cursor:pointer}
+#otaBtn:active{filter:brightness(0.9)}
+#lineSel{display:flex;gap:8px;margin-bottom:12px}
+#lineSel button{flex:1;min-height:44px;padding:8px;border-radius:10px;
+  border:1px solid var(--stroke);background:rgba(255,255,255,0.08);color:var(--content);
+  font-size:15px;font-weight:500;cursor:pointer}
+#lineSel button.active{background:var(--content);color:#000;border-color:var(--content)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media (hover:hover){
+  .btn:hover,#otaBtn:hover,#lineSel button:hover{filter:brightness(1.15)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important;animation:none !important}
+}
+@media (prefers-reduced-transparency:reduce){
+  :root{--surface:rgba(20,20,22,0.96);--surface-strong:#141416}
+  #panel{-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@media (prefers-contrast:more){
+  :root{--stroke:rgba(255,255,255,0.5);--content-2:#E5E5EA}
+}
 </style>
 </head>
 <body>
 <div id="stage">
-  <img id="stream" alt="stream">
-  <canvas id="ov"></canvas>
+  <img id="stream" alt="Kamerabild">
+  <canvas id="ov" role="button" tabindex="0" aria-label="Menü öffnen oder schließen"></canvas>
 </div>
 <div id="ver"></div>
 <div id="volt">--.-V</div>
-<div id="busy">⚠ Anderes Gerät<br>empfängt den Stream</div>
-<div id="hint">Tippe auf den Bildschirm für Menü</div>
+<div id="busy" role="status" aria-live="polite">⚠ Anderes Gerät<br>empfängt den Stream</div>
+<div id="hint">Tippe daneben, um das Menü zu schließen</div>
+<div id="toast" role="status" aria-live="polite"></div>
 
-<div id="menu">
+<div id="menu" role="region" aria-label="Einstellungen">
   <input type="file" id="fileInput" accept=".bin" style="display:none">
-  <div id="ctrl">
-    <div class="btn" id="bLeft">◀</div>
-    <div class="btn" id="bRight">▶</div>
-    <div class="btn" id="bRotL">↺</div>
-    <div class="btn" id="bRotR">↻</div>
+  <div id="ctrl" role="group" aria-label="Linie verschieben und drehen">
+    <button type="button" class="btn" id="bLeft" aria-label="Linie nach links">◀</button>
+    <button type="button" class="btn" id="bRight" aria-label="Linie nach rechts">▶</button>
+    <button type="button" class="btn" id="bRotL" aria-label="Gegen den Uhrzeigersinn drehen">↺</button>
+    <button type="button" class="btn" id="bRotR" aria-label="Im Uhrzeigersinn drehen">↻</button>
   </div>
   <div id="panel">
     <h3>Einstellungen</h3>
-    <div id="lineSel">
-      <button id="selRed" class="active">Rot</button>
-      <button id="selYellow">Gelb</button>
+    <div id="lineSel" role="group" aria-label="Linie auswählen">
+      <button type="button" id="selRed" class="active" aria-pressed="true">Rot</button>
+      <button type="button" id="selYellow" aria-pressed="false">Gelb</button>
     </div>
-    <label>X-Position</label>
+    <label for="xRange">X-Position <output id="xOut" for="xRange">50</output></label>
     <input type="range" id="xRange" min="0" max="100" step="1">
-    <label>Winkel</label>
+    <label for="aRange">Winkel <output id="aOut" for="aRange">0</output></label>
     <input type="range" id="aRange" min="-45" max="45" step="1">
-    <label>Dicke</label>
+    <label for="wRange">Dicke <output id="wOut" for="wRange">3</output></label>
     <input type="range" id="wRange" min="1" max="15" step="1">
-    <label>Bild drehen (°)</label>
+    <label for="rotRange">Bild drehen <output id="rotOut" for="rotRange">0°</output></label>
     <input type="range" id="rotRange" min="-180" max="180" step="1">
-    <label>Helligkeit</label>
+    <label for="briRange">Helligkeit <output id="briOut" for="briRange">0</output></label>
     <input type="range" id="briRange" min="-2" max="2" step="1">
-    <label>Kontrast</label>
+    <label for="conRange">Kontrast <output id="conOut" for="conRange">0</output></label>
     <input type="range" id="conRange" min="-2" max="2" step="1">
-    <label>Sättigung</label>
+    <label for="satRange">Sättigung <output id="satOut" for="satRange">0</output></label>
     <input type="range" id="satRange" min="-2" max="2" step="1">
     <div class="chk">
       <input type="checkbox" id="nightChk">
-      <label for="nightChk" style="margin:0">Nachtsicht</label>
+      <label for="nightChk">Nachtsicht</label>
     </div>
-    <label>Modus</label>
+    <label for="modeSel">Modus</label>
     <select id="modeSel">
       <option value="0">Dauerbetrieb</option>
       <option value="1">Geregelt</option>
     </select>
-    <label>Grenzwert (V)</label>
+    <label for="thresh">Grenzwert (V)</label>
     <input type="number" id="thresh" min="6" max="14.5" step="0.1">
   </div>
-  <button id="otaBtn">OTA</button>
+  <button type="button" id="otaBtn">Update</button>
 </div>
 
 <script>
@@ -114,6 +161,14 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var menu=document.getElementById('menu');
   var hint=document.getElementById('hint');
   var busy=document.getElementById('busy');
+
+  /* Kurze Rueckmeldung im Bild statt blockierendem alert(). */
+  function toast(msg){
+    var t=document.getElementById('toast');
+    t.textContent=msg;t.style.display='block';
+    clearTimeout(toast.t);
+    toast.t=setTimeout(function(){t.style.display='none';},4000);
+  }
 
   /* ===== Bilddrehung: gesamten Stage (Bild + Overlay) drehen =====
    * Winkel kommt vom Server (NVS), angewendet als CSS-Transform.
@@ -142,6 +197,8 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
   var streamTimer=null;
   var lastUrl=null;
   var streamLastOk=0;
+  var streamStarted=Date.now();
+  var otherDevice=false;
 
   function showFrame(blob){
     if(lastUrl) URL.revokeObjectURL(lastUrl);
@@ -163,10 +220,13 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
       streamXHR=null;
       if(x.status===200&&x.response&&x.response.size>0){
         streamLastOk=Date.now();
+        otherDevice=false;
         busy.style.display='none';
         showFrame(x.response);
       } else if(x.status===503){
-        busy.style.display='block';   /* anderes Geraet bedient den Stream */
+        otherDevice=true;   /* anderes Geraet bedient den Stream */
+        busy.innerHTML='⚠ Anderes Gerät<br>empfängt den Stream';
+        busy.style.display='block';
       }
       schedule();
     };
@@ -186,6 +246,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
       if(streamBusy) streamBusy=false;
       clearTimeout(streamTimer);
       schedule();
+      if(Date.now()-streamStarted>7000&&!otherDevice){
+        busy.textContent='⚠ Keine Verbindung zur Kamera';
+        busy.style.display='block';
+      }
     }
   },2000);
 
@@ -305,6 +369,9 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     draw();
   }
   cv.addEventListener('click',function(e){e.preventDefault();onTap();});
+  cv.addEventListener('keydown',function(e){
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();onTap();}
+  });
   /* Menü schliessen bei Tipp auf freie Stelle (nicht Button/Panel) */
   menu.addEventListener('click',function(e){
     if(e.target===menu){menu.classList.remove('show');hint.style.display='none';draw();}
@@ -325,24 +392,34 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     sel=k;
     document.getElementById('selRed').classList.toggle('active',k==='red');
     document.getElementById('selYellow').classList.toggle('active',k==='yellow');
+    document.getElementById('selRed').setAttribute('aria-pressed',k==='red');
+    document.getElementById('selYellow').setAttribute('aria-pressed',k==='yellow');
     syncSliders();
   }
   document.getElementById('selRed').addEventListener('click',function(){selectLine('red');});
   document.getElementById('selYellow').addEventListener('click',function(){selectLine('yellow');});
 
+  function setOut(id,v){var e=document.getElementById(id);if(e)e.value=v;}
+  function syncOutputs(){
+    var c=line(sel);
+    setOut('xOut',c.x);setOut('aOut',c.angle);setOut('wOut',c.w);
+    setOut('rotOut',Math.round(rot)+'°');
+    setOut('briOut',cfg.bri);setOut('conOut',cfg.con);setOut('satOut',cfg.sat);
+  }
   function syncSliders(){
     var c=line(sel);
     document.getElementById('xRange').value=c.x;
     document.getElementById('aRange').value=c.angle;
     document.getElementById('wRange').value=c.w;
+    syncOutputs();
   }
-  document.getElementById('xRange').addEventListener('input',function(){line(sel).x=+this.value;draw();saveDebounced();});
-  document.getElementById('aRange').addEventListener('input',function(){line(sel).angle=+this.value;draw();saveDebounced();});
-  document.getElementById('wRange').addEventListener('input',function(){line(sel).w=+this.value;draw();saveDebounced();});
-  document.getElementById('rotRange').addEventListener('input',function(){rot=+this.value;applyRot();saveDebounced();});
-  document.getElementById('briRange').addEventListener('input',function(){cfg.bri=+this.value;saveDebounced();});
-  document.getElementById('conRange').addEventListener('input',function(){cfg.con=+this.value;saveDebounced();});
-  document.getElementById('satRange').addEventListener('input',function(){cfg.sat=+this.value;saveDebounced();});
+  document.getElementById('xRange').addEventListener('input',function(){line(sel).x=+this.value;draw();syncOutputs();saveDebounced();});
+  document.getElementById('aRange').addEventListener('input',function(){line(sel).angle=+this.value;draw();syncOutputs();saveDebounced();});
+  document.getElementById('wRange').addEventListener('input',function(){line(sel).w=+this.value;draw();syncOutputs();saveDebounced();});
+  document.getElementById('rotRange').addEventListener('input',function(){rot=+this.value;applyRot();syncOutputs();saveDebounced();});
+  document.getElementById('briRange').addEventListener('input',function(){cfg.bri=+this.value;syncOutputs();saveDebounced();});
+  document.getElementById('conRange').addEventListener('input',function(){cfg.con=+this.value;syncOutputs();saveDebounced();});
+  document.getElementById('satRange').addEventListener('input',function(){cfg.sat=+this.value;syncOutputs();saveDebounced();});
   document.getElementById('nightChk').addEventListener('change',function(){cfg.night=this.checked?1:0;save();});
   document.getElementById('modeSel').addEventListener('change',function(){cfg.mode=+this.value;save();});
   document.getElementById('thresh').addEventListener('change',function(){cfg.threshold=parseFloat(this.value);save();});
@@ -361,20 +438,21 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;
     var f=this.files[0];
     this.value='';
     if(!f)return;
-    otaBtn.textContent='0%';
+    otaBtn.textContent='Update 0 %';
     var x=new XMLHttpRequest();
     x.open('POST','/update',true);
     x.setRequestHeader('Content-Type','application/octet-stream');
     x.upload.onprogress=function(e){
-      if(e.lengthComputable){otaBtn.textContent=Math.round(e.loaded/e.total*100)+'%';}
+      if(e.lengthComputable){otaBtn.textContent='Update '+Math.round(e.loaded/e.total*100)+' %';}
     };
     x.onload=function(){
-      otaBtn.textContent='OTA';
-      alert(x.responseText||'Fertig - Neustart');
+      otaBtn.textContent='Update';
+      toast(x.status===200?'Update übertragen. Die Kamera startet neu.'
+        :'Update fehlgeschlagen ('+x.status+'). Verbindung prüfen und erneut versuchen.');
     };
     x.onerror=function(){
-      otaBtn.textContent='OTA';
-      alert('Fehler beim Upload');
+      otaBtn.textContent='Update';
+      toast('Update fehlgeschlagen. Verbindung prüfen und erneut versuchen.');
     };
     x.send(f);   /* sendet die .bin als Rohdaten an /update */
   });
